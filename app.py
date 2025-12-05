@@ -168,244 +168,181 @@ if search_keyword:
 # --- Pages ---
 
 if page == "人物一覧":
-    # Header and View Mode
-    h_col1, h_col2 = st.columns([3, 1])
-    with h_col1:
+    # --- State Initialization ---
+    if "plist_sort_key" not in st.session_state:
+        st.session_state["plist_sort_key"] = "last_name"
+    if "plist_sort_order" not in st.session_state:
+        st.session_state["plist_sort_order"] = "asc"
+    if "plist_active_filters" not in st.session_state:
+        st.session_state["plist_active_filters"] = []
+
+    # --- Header & View Toggle ---
+    col_title, col_view = st.columns([3, 1])
+    with col_title:
         st.title("📂 人物一覧")
-    with h_col2:
+    with col_view:
         view_mode = st.radio("表示形式", ["テーブル", "カード"], horizontal=True, label_visibility="collapsed")
 
     people = get_people(db)
 
-    if not people:
-        st.info("人物が登録されていません。「人物登録」から追加してください。")
-    else:
-        # Initialize session state for filters and search results
-        if "pl_search_executed" not in st.session_state:
-            st.session_state["pl_search_executed"] = False
+    # --- Filter & Search Section ---
+    filter_cols = ["名前", "グループ", "ステータス", "性別", "年齢", "最終接触日"]
+    ops = ["含む", "一致する", "以上", "以下"]
 
-        # Fixed 3 rows for filters
-        # We use st.form to ensure search only triggers on submission
-        filter_configs = []
+    # Fixed 3 rows of filters
+    for i in range(3):
+        c1, c2, c3 = st.columns([2, 2, 4])
+        with c1:
+            st.selectbox(f"col_{i}", filter_cols, key=f"f_col_{i}", label_visibility="collapsed")
+        with c2:
+            st.selectbox(f"op_{i}", ops, key=f"f_op_{i}", label_visibility="collapsed")
+        with c3:
+            st.text_input(f"val_{i}", key=f"f_val_{i}", label_visibility="collapsed", placeholder="値")
 
-        with st.form("person_list_search_form"):
-            for i in range(3):
-                fc1, fc2, fc3 = st.columns([2, 2, 3])
-                with fc1:
-                    st.selectbox(f"col_{i}", ["名前", "グループ", "ステータス", "性別", "年齢", "最終接触日"], key=f"f_col_{i}", label_visibility="collapsed")
-                with fc2:
-                    st.selectbox(f"op_{i}", ["含む", "一致する", "以上", "以下"], key=f"f_op_{i}", label_visibility="collapsed")
-                with fc3:
-                    st.text_input(f"val_{i}", key=f"f_val_{i}", label_visibility="collapsed", placeholder="値")
-
-            # Centered Buttons inside form
-            b_col_L, b_col_S, b_col_R, b_col_E = st.columns([1, 1, 1, 1])
-
-            submitted_search = False
-            submitted_reset = False
-
-            with b_col_S:
-                submitted_search = st.form_submit_button("🔍 検索", type="primary", use_container_width=True)
-            with b_col_R:
-                submitted_reset = st.form_submit_button("リセット", use_container_width=True)
-
-            if submitted_search:
-                st.session_state["pl_search_executed"] = True
+    # Search & Reset Buttons
+    b_c1, b_c2, b_c3 = st.columns([2, 2, 2])
+    with b_c2:
+        sb_c1, sb_c2 = st.columns(2)
+        with sb_c1:
+            if st.button("検索実行", type="primary", use_container_width=True):
+                new_filters = []
+                for i in range(3):
+                    val = st.session_state.get(f"f_val_{i}", "").strip()
+                    if val:
+                        new_filters.append({
+                            "col": st.session_state.get(f"f_col_{i}"),
+                            "op": st.session_state.get(f"f_op_{i}"),
+                            "val": val
+                        })
+                st.session_state["plist_active_filters"] = new_filters
                 st.rerun()
-
-            if submitted_reset:
-                st.session_state["pl_search_executed"] = False
-                # Manually clear session state keys for the inputs
+        with sb_c2:
+            if st.button("リセット", use_container_width=True):
+                st.session_state["plist_active_filters"] = []
                 for i in range(3):
                     st.session_state[f"f_val_{i}"] = ""
                 st.rerun()
 
-        # Re-construct filter configs from session state (available after rerun or if persistent)
-        for i in range(3):
-            c = st.session_state.get(f"f_col_{i}")
-            o = st.session_state.get(f"f_op_{i}")
-            v = st.session_state.get(f"f_val_{i}")
-            if v:
-                filter_configs.append({"col": c, "op": o, "val": v})
-
-        st.divider()
-
-        # Sorting Logic (Session State)
-        if "pl_sort_col" not in st.session_state:
-            st.session_state["pl_sort_col"] = "名前"
-        if "pl_sort_asc" not in st.session_state:
-            st.session_state["pl_sort_asc"] = True
-
-        # Apply Filters & Sort
+    if not people:
+        st.info("人物が登録されていません。「人物登録」から追加してください。")
+    else:
+        # --- Filtering Logic ---
         filtered_people = []
         today = date.today()
 
-        # Decide source: if search executed, apply filters. Else, empty?
-        # Requirement: "Until search button is pressed, do not search."
-        # This usually means show nothing or show all?
-        # Typically "do not search" means "show initial state" or "show nothing".
-        # Given "Search and Reset", usually Reset shows all or Search shows filtered.
-        # If "do not search until button pressed" implies the list should be empty initially?
-        # Or does it mean "don't apply *new* filters until pressed"?
-        # User said: "Until search execution button is pressed, do not search." (検索実行ボタンを押すまでは検索しない)
-        # Often this means the list is empty or shows everything but doesn't react to typing immediately.
-        # Context: "List page". Usually you want to see the list.
-        # I will assume it means "don't re-filter on every keystroke" (which is standard Streamlit behavior if not using forms).
-        # But wait, "Search row has 3 lines... do not search until pressed".
-        # If I show all people by default, that's fine. If I show nothing, that's also valid.
-        # Let's assume "Show all people initially (or previous search)" but "Don't update based on inputs until clicked".
-        # Actually, if I use `st.session_state["pl_search_executed"]`, I can control this.
-        # If not executed, maybe show all? Or show none?
-        # Let's show ALL by default if no filters are active/pressed?
-        # Or maybe the user wants an empty screen?
-        # "Remove filter sorting in list... Remove add button... make 3 search rows... do not search until button pressed".
-        # I'll stick to: Show all people if no search active (or reset), apply filters when Search is pressed.
+        for p in people:
+            match = True
+            age = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
+            last_contact = get_last_interaction_date(p.id)
 
-        target_people = people
+            for f in st.session_state["plist_active_filters"]:
+                # Prepare Value
+                val_to_check = ""
+                if f["col"] == "名前": val_to_check = f"{p.last_name} {p.first_name} {p.yomigana_last or ''} {p.yomigana_first or ''}"
+                elif f["col"] == "グループ": val_to_check = p.tags or ""
+                elif f["col"] == "ステータス": val_to_check = p.status or ""
+                elif f["col"] == "性別": val_to_check = p.gender or ""
+                elif f["col"] == "年齢": val_to_check = str(age)
+                elif f["col"] == "最終接触日": val_to_check = last_contact.strftime('%Y-%m-%d') if last_contact else ""
 
-        if st.session_state["pl_search_executed"]:
-            temp_filtered = []
-            for p in target_people:
-                match = True
-                age = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
-                last_contact = get_last_interaction_date(p.id)
+                target_val = f["val"]
+                op = f["op"]
 
-                for f in filter_configs:
-                    val_to_check = ""
-                    if f["col"] == "名前": val_to_check = f"{p.last_name} {p.first_name}"
-                    elif f["col"] == "グループ": val_to_check = p.tags or ""
-                    elif f["col"] == "ステータス": val_to_check = p.status or ""
-                    elif f["col"] == "性別": val_to_check = p.gender or ""
-                    elif f["col"] == "年齢": val_to_check = str(age)
-                    elif f["col"] == "最終接触日": val_to_check = last_contact.strftime('%Y-%m-%d') if last_contact else ""
+                if op == "含む":
+                    if target_val.lower() not in val_to_check.lower(): match = False
+                elif op == "一致する":
+                    if target_val.lower() != val_to_check.lower(): match = False
+                elif op == "以上":
+                    try:
+                        if float(val_to_check) < float(target_val): match = False
+                    except: match = False
+                elif op == "以下":
+                    try:
+                        if float(val_to_check) > float(target_val): match = False
+                    except: match = False
 
-                    target_val = f["val"]
+            if match:
+                filtered_people.append(p)
 
-                    if f["op"] == "含む":
-                        if target_val.lower() not in val_to_check.lower(): match = False
-                    elif f["op"] == "一致する":
-                        if target_val.lower() != val_to_check.lower(): match = False
-                    elif f["op"] == "以上":
-                        try:
-                            if float(val_to_check) < float(target_val): match = False
-                        except: match = False
-                    elif f["op"] == "以下":
-                        try:
-                            if float(val_to_check) > float(target_val): match = False
-                        except: match = False
+        # --- Sorting Logic ---
+        sort_key = st.session_state["plist_sort_key"]
+        sort_order = st.session_state["plist_sort_order"]
 
-                if match:
-                    temp_filtered.append(p)
-            filtered_people = temp_filtered
-        else:
-            filtered_people = people # Default show all? Or show none? I'll show all as it's a "List".
+        def get_sort_val(x):
+            if sort_key == "last_name": return (x.yomigana_last or x.last_name or "", x.yomigana_first or x.first_name or "")
+            if sort_key == "tags": return x.tags or ""
+            if sort_key == "status": return x.status or ""
+            if sort_key == "gender": return x.gender or ""
+            if sort_key == "age": return calculate_age(x.birth_date, x.birth_year, x.birth_month, x.birth_day) if isinstance(calculate_age(x.birth_date, x.birth_year, x.birth_month, x.birth_day), int) else -1
+            if sort_key == "last_contact":
+                d = get_last_interaction_date(x.id)
+                return d if d else date.min
+            return ""
 
-        # Sorting
-        def sort_key(p):
-            k = st.session_state["pl_sort_col"]
-            val = ""
-            if k == "名前": val = f"{p.last_name} {p.first_name}"
-            elif k == "グループ": val = p.tags or "zzz"
-            elif k == "ステータス": val = p.status or "zzz"
-            elif k == "性別": val = p.gender or "zzz"
-            elif k == "年齢": val = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
-            elif k == "最終接触":
-                 d = get_last_interaction_date(p.id)
-                 val = d.strftime('%Y-%m-%d') if d else "0000-00-00"
-            return val
+        filtered_people.sort(key=get_sort_val, reverse=(sort_order == "desc"))
 
-        filtered_people = sorted(filtered_people, key=sort_key, reverse=not st.session_state["pl_sort_asc"])
-
+        # --- Display ---
         if not filtered_people:
-            st.warning("該当する人物が見つかりませんでした。")
+            st.warning("条件に一致する人物がいません。")
         else:
             if view_mode == "テーブル":
-                # Helper for header sort button
-                def sort_header(col_name, label):
-                    # Sort icon
-                    icon = "↕"
-                    if st.session_state["pl_sort_col"] == col_name:
-                         icon = "▲" if st.session_state["pl_sort_asc"] else "▼"
-                    if st.button(f"{label} {icon}", key=f"sort_btn_{col_name}", use_container_width=True):
-                         if st.session_state["pl_sort_col"] == col_name:
-                             st.session_state["pl_sort_asc"] = not st.session_state["pl_sort_asc"]
-                         else:
-                             st.session_state["pl_sort_col"] = col_name
-                             st.session_state["pl_sort_asc"] = True
-                         st.rerun()
+                # Helper for sort buttons
+                def sort_btn(label, key_name):
+                    arrow = ""
+                    if st.session_state["plist_sort_key"] == key_name:
+                        arrow = " ▼" if st.session_state["plist_sort_order"] == "desc" else " ▲"
+                    if st.button(f"{label}{arrow}", key=f"sort_btn_{key_name}"):
+                        if st.session_state["plist_sort_key"] == key_name:
+                            st.session_state["plist_sort_order"] = "asc" if st.session_state["plist_sort_order"] == "desc" else "desc"
+                        else:
+                            st.session_state["plist_sort_key"] = key_name
+                            st.session_state["plist_sort_order"] = "asc"
+                        st.rerun()
 
-                # Table Header with Sort Buttons and compacted layout
-                # Columns: Icon(1), Name(2), Gender(1), Group(2), Age(1), Birthday(2), LastContact(2), Action(2)
-                h0, h1, h2, h3, h4, h5, h6, h7 = st.columns([0.5, 2, 1, 2, 1, 2, 2, 2])
-                with h0: st.write("") # Icon Header placeholder
-                with h1: sort_header("名前", "名前")
-                with h2: sort_header("性別", "性別")
-                with h3: sort_header("グループ", "グループ")
-                with h4: sort_header("年齢", "年齢")
-                with h5: sort_header("誕生日", "誕生日") # No sort for this in crud yet properly but we'll map to something
-                with h6: sort_header("最終接触", "最終接触")
-                with h7: st.markdown("**操作**") # No sort
-
+                # Table Header
+                # Cols: Icon(0.8), Name(2), Gender(0.8), Group(1.5), Age(0.8), Birthday(1.5), LastContact(1.5), Action(2)
+                c_h1, c_h2, c_h3, c_h4, c_h5, c_h6, c_h7, c_h8 = st.columns([0.8, 2, 0.8, 1.5, 0.8, 1.5, 1.5, 2])
+                with c_h1: st.write("📷")
+                with c_h2: sort_btn("名前", "last_name")
+                with c_h3: sort_btn("性別", "gender")
+                with c_h4: sort_btn("グループ", "tags")
+                with c_h5: sort_btn("年齢", "age")
+                with c_h6: st.write("誕生日")
+                with c_h7: sort_btn("最終接触", "last_contact")
+                with c_h8: st.write("操作")
                 st.divider()
 
                 for p in filtered_people:
                     with st.container():
                         last_contact = get_last_interaction_date(p.id)
-                        last_contact_str = last_contact.strftime('%Y-%m-%d') if last_contact else "なし"
+                        last_contact_str = last_contact.strftime('%Y-%m-%d') if last_contact else "-"
                         age = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
 
-                        # Birthday Flag (1 month)
-                        birthday_flag = ""
-                        # Logic: if birth_month/day exists
-                        if p.birth_month and p.birth_day:
-                            # Simple check: is it within next 30 days?
-                            b_date = date(today.year, p.birth_month, p.birth_day)
-                            if b_date < today:
-                                b_date = date(today.year + 1, p.birth_month, p.birth_day)
-
-                            delta = (b_date - today).days
-                            if 0 <= delta <= 30:
-                                birthday_flag = "🎂"
-                        elif p.birth_date:
-                             # Legacy
-                             b_date = date(today.year, p.birth_date.month, p.birth_date.day)
-                             if b_date < today:
-                                b_date = date(today.year + 1, p.birth_date.month, p.birth_date.day)
-                             delta = (b_date - today).days
-                             if 0 <= delta <= 30:
-                                birthday_flag = "🎂"
-
-                        # Last Contact Flag (3 months)
-                        contact_flag = ""
-                        if last_contact:
-                            delta_days = (today - last_contact).days
-                            if delta_days >= 90:
-                                contact_flag = "⚠️" # 3 months
-
+                        # Birthday Display
                         birthday_display = ""
-                        if p.birth_year: birthday_display += f"{p.birth_year}年"
-                        if p.birth_month: birthday_display += f"{p.birth_month}月"
-                        if p.birth_day: birthday_display += f"{p.birth_day}日"
+                        if p.birth_year: birthday_display += f"{p.birth_year}."
+                        if p.birth_month: birthday_display += f"{p.birth_month}."
+                        if p.birth_day: birthday_display += f"{p.birth_day}"
                         if not birthday_display and p.birth_date: birthday_display = p.birth_date.strftime('%Y/%m/%d')
-                        if birthday_flag: birthday_display += f" {birthday_flag}"
 
-                        c0, c1, c2, c3, c4, c5, c6, c7 = st.columns([0.5, 2, 1, 2, 1, 2, 2, 2])
+                        # Flags (Simple logic)
+                        flag_icon = ""
+                        if last_contact and (today - last_contact).days >= 90:
+                            flag_icon = "⚠️"
 
-                        # Icon
-                        with c0:
-                             if p.avatar_path and os.path.exists(p.avatar_path):
-                                 st.image(p.avatar_path, use_container_width=True)
-                             else:
-                                 st.write("👤")
-
-                        c1.write(f"{p.last_name} {p.first_name}")
-                        c2.write(p.gender or "-")
-                        c3.write(p.tags or "-")
-                        c4.write(str(age))
-                        c5.write(birthday_display or "-")
-                        c6.write(f"{last_contact_str} {contact_flag}")
-
-                        with c7:
+                        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([0.8, 2, 0.8, 1.5, 0.8, 1.5, 1.5, 2])
+                        with c1:
+                            if p.avatar_path and os.path.exists(p.avatar_path):
+                                st.image(p.avatar_path, width=40)
+                            else:
+                                st.write("👤")
+                        with c2: st.write(f"{p.last_name} {p.first_name}")
+                        with c3: st.write(p.gender or "-")
+                        with c4: st.write(p.tags or "-")
+                        with c5: st.write(str(age))
+                        with c6: st.write(birthday_display or "-")
+                        with c7: st.write(f"{last_contact_str} {flag_icon}")
+                        with c8:
                             b1, b2, b3 = st.columns(3)
                             with b1:
                                 if st.button("詳細", key=f"det_{p.id}"):
@@ -421,66 +358,51 @@ if page == "人物一覧":
                                 if st.button("削除", key=f"del_{p.id}", type="primary"):
                                     delete_person(db, p.id)
                                     st.rerun()
+                        st.divider()
 
             elif view_mode == "カード":
-                cols = st.columns(3) # Adjust to 3 columns to give more space for internal layout
+                cols = st.columns(4)
                 for i, p in enumerate(filtered_people):
-                    with cols[i % 3]:
+                    with cols[i % 4]:
                         with st.container(border=True):
-                            # Internal Layout: Left (Icon) - Right (Info)
-                            c_card_l, c_card_r = st.columns([1, 2])
-
-                            with c_card_l:
+                            c_left, c_right = st.columns([1, 2])
+                            with c_left:
                                 if p.avatar_path and os.path.exists(p.avatar_path):
-                                    st.image(p.avatar_path, use_container_width=True)
+                                    st.image(p.avatar_path, use_column_width=True)
                                 else:
                                     st.write("👤")
 
-                            with c_card_r:
-                                # Name (Kanji)
+                            with c_right:
+                                # 姓名・せいめい
                                 st.markdown(f"**{p.last_name} {p.first_name}**")
-                                # Name (Kana) - small
-                                yomi = f"{p.yomigana_last or ''} {p.yomigana_first or ''}".strip()
-                                if yomi:
-                                    st.caption(f"{yomi}")
-                                # Nickname - small
+                                st.caption(f"{p.yomigana_last or ''} {p.yomigana_first or ''}")
+                                # Nickname
                                 if p.nickname:
                                     st.caption(f"({p.nickname})")
 
                                 # Info
                                 age = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
-                                last_contact = get_last_interaction_date(p.id)
-                                lc_str = last_contact.strftime('%Y-%m-%d') if last_contact else "-"
+                                lc = get_last_interaction_date(p.id)
+                                lc_s = lc.strftime('%Y/%m/%d') if lc else "-"
+                                st.markdown(f"{p.gender or '-'}<br>{age}歳<br>最終: {lc_s}", unsafe_allow_html=True)
 
-                                st.markdown(f"<small>{p.gender or '-'} / {age}歳</small>", unsafe_allow_html=True)
-                                st.markdown(f"<small>最終: {lc_str}</small>", unsafe_allow_html=True)
-
-                            # Bottom Actions
+                            st.write("")
+                            # Actions
                             b1, b2, b3 = st.columns(3)
                             with b1:
-                                if st.button("詳細", key=f"c_det_{p.id}", use_container_width=True):
-                                     st.session_state["selected_person_id"] = p.id
-                                     navigate_to("ダッシュボード")
-                                     st.rerun()
+                                if st.button("詳細", key=f"cd_det_{p.id}"):
+                                    st.session_state["selected_person_id"] = p.id
+                                    navigate_to("ダッシュボード")
+                                    st.rerun()
                             with b2:
-                                if st.button("編集", key=f"c_edit_{p.id}", use_container_width=True):
-                                     st.session_state["edit_person_id"] = p.id
-                                     navigate_to("人物登録")
-                                     st.rerun()
+                                if st.button("編集", key=f"cd_edit_{p.id}"):
+                                    st.session_state["edit_person_id"] = p.id
+                                    navigate_to("人物登録")
+                                    st.rerun()
                             with b3:
-                                if st.button("削除", key=f"c_del_{p.id}", type="primary", use_container_width=True):
-                                     delete_person(db, p.id)
-                                     st.rerun()
-
-                            # Flags (Optional, maybe below or overlaid? User didn't specify position, but good to keep)
-                            # Adding flags at bottom or overlay if needed.
-                            # User said "Bottom: Detail, Edit, Delete". Flags can be small alerts above buttons or part of info.
-                            # I'll put them above buttons if critical.
-                            contact_flag = ""
-                            if last_contact:
-                                delta_days = (today - last_contact).days
-                                if delta_days >= 90:
-                                    st.caption("⚠️ 疎遠")
+                                if st.button("削除", key=f"cd_del_{p.id}", type="primary"):
+                                    delete_person(db, p.id)
+                                    st.rerun()
 
 
 elif page == "人物登録":
