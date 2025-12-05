@@ -20,3 +20,6 @@ venv/
 
 # --- requirements ---
 lib/
+
+# --- アカウント情報 ---
+account/
