@@ -19,6 +19,7 @@ class Person(Base):
     status = Column(String)  # e.g., Friend, Acquaintance, VIP
     first_met_date = Column(Date)
     notes = Column(Text)
+    strategy = Column(Text) # 攻略方法
 
     # New columns
     tags = Column(String) # Chunking/Group

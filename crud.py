@@ -9,7 +9,7 @@ import random
 def create_person(db: Session, last_name: str, first_name: str, yomigana_last: Optional[str], yomigana_first: Optional[str],
                   nickname: Optional[str], birth_date: Optional[date], gender: Optional[str], blood_type: Optional[str],
                   status: str, first_met_date: Optional[date], notes: Optional[str], tags: Optional[str]=None,
-                  avatar_path: Optional[str]=None, is_self: bool=False, prediction_notes: Optional[str]=None) -> Person:
+                  avatar_path: Optional[str]=None, is_self: bool=False, prediction_notes: Optional[str]=None, strategy: Optional[str]=None) -> Person:
     new_person = Person(
         last_name=last_name,
         first_name=first_name,
@@ -25,7 +25,8 @@ def create_person(db: Session, last_name: str, first_name: str, yomigana_last: O
         tags=tags,
         avatar_path=avatar_path,
         is_self=is_self,
-        prediction_notes=prediction_notes
+        prediction_notes=prediction_notes,
+        strategy=strategy
     )
     db.add(new_person)
     db.commit()
