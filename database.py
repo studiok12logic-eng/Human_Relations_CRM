@@ -13,11 +13,20 @@ class Person(Base):
     yomigana_first = Column(String)
 
     nickname = Column(String)
-    birth_date = Column(Date)
+    birth_date = Column(Date) # Legacy, keep for now or migration
+    birth_year = Column(Integer)
+    birth_month = Column(Integer)
+    birth_day = Column(Integer)
+
     gender = Column(String)
     blood_type = Column(String)
     status = Column(String)  # e.g., Friend, Acquaintance, VIP
-    first_met_date = Column(Date)
+
+    first_met_date = Column(Date) # Legacy
+    first_met_year = Column(Integer)
+    first_met_month = Column(Integer)
+    first_met_day = Column(Integer)
+
     notes = Column(Text)
     strategy = Column(Text) # 攻略方法
 

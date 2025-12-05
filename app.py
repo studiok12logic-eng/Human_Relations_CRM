@@ -68,11 +68,18 @@ if page != st.session_state["current_page"]:
     st.rerun()
 
 # --- Helper Functions ---
-def calculate_age(born):
-    if not born:
-        return "不明"
+def calculate_age(born, birth_year=None, birth_month=None, birth_day=None):
     today = date.today()
-    return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    if born:
+        return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+    if birth_year and birth_month and birth_day:
+        return today.year - birth_year - ((today.month, today.day) < (birth_month, birth_day))
+
+    if birth_year:
+        return today.year - birth_year # Rough estimate
+
+    return "不明"
 
 def get_last_interaction_date(person_id):
     interactions = get_interactions_by_person(db, person_id)
@@ -179,69 +186,270 @@ if page == "人物一覧":
         elif sort_option == "ステータス順":
             sorted_people = sorted(people, key=lambda x: x.status if x.status else "zzz")
 
-        # Display as a table with calculated fields
-        data = []
+        # Filter Logic (Multiple Filters)
+        with st.expander("フィルタ設定"):
+             if "person_list_filters" not in st.session_state:
+                 st.session_state["person_list_filters"] = []
+
+             f_col1, f_col2, f_col3, f_col4 = st.columns([2, 2, 2, 1])
+             with f_col1:
+                 f_column = st.selectbox("カラム", ["名前", "グループ", "ステータス", "性別", "年齢", "最終接触日"], key="f_col_select")
+             with f_col2:
+                 f_op = st.selectbox("条件", ["含む", "一致する", "以上", "以下"], key="f_op_select")
+             with f_col3:
+                 f_val = st.text_input("値", key="f_val_input")
+             with f_col4:
+                 if st.button("追加", key="add_filter_btn"):
+                     st.session_state["person_list_filters"].append({"col": f_column, "op": f_op, "val": f_val})
+
+             if st.session_state["person_list_filters"]:
+                 st.write("適用中のフィルタ:")
+                 for i, f in enumerate(st.session_state["person_list_filters"]):
+                     c1, c2 = st.columns([4, 1])
+                     with c1: st.write(f"- {f['col']} が '{f['val']}' {f['op']}")
+                     with c2:
+                         if st.button("削除", key=f"del_filter_{i}"):
+                             st.session_state["person_list_filters"].pop(i)
+                             st.rerun()
+
+        if st.button("検索実行"):
+            pass # Just triggers rerun to apply filters
+
+        # Display Mode Toggle
+        view_mode = st.radio("表示形式", ["テーブル", "カード"], horizontal=True)
+
+        # Apply Filters & Sort
+        filtered_people = []
         today = date.today()
 
         for p in sorted_people:
-            # Search filter
+            # Global Search Filter
             search_target = f"{p.last_name} {p.first_name} {p.nickname} {p.tags} {p.status}"
-            if search_query.lower() in search_target.lower():
-                # Last Contact Logic
-                last_contact = get_last_interaction_date(p.id)
-                last_contact_str = last_contact.strftime('%Y-%m-%d') if last_contact else "なし"
+            if search_query and search_query.lower() not in search_target.lower():
+                continue
 
-                alert_color = None
-                if last_contact:
-                    delta_days = (today - last_contact).days
-                    if delta_days >= 180: # 6 months
-                        alert_color = "🔴" # Red
-                    elif delta_days >= 90: # 3 months
-                        alert_color = "🟡" # Yellow
+            # Custom Filters
+            match = True
+            age = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
+            last_contact = get_last_interaction_date(p.id)
 
-                status_display = p.status
-                if alert_color:
-                    status_display = f"{alert_color} {p.status}"
+            for f in st.session_state["person_list_filters"]:
+                val_to_check = ""
+                if f["col"] == "名前": val_to_check = f"{p.last_name} {p.first_name}"
+                elif f["col"] == "グループ": val_to_check = p.tags or ""
+                elif f["col"] == "ステータス": val_to_check = p.status or ""
+                elif f["col"] == "性別": val_to_check = p.gender or ""
+                elif f["col"] == "年齢": val_to_check = str(age)
+                elif f["col"] == "最終接触日": val_to_check = last_contact.strftime('%Y-%m-%d') if last_contact else ""
 
-                data.append({
-                    "ID": p.id,
-                    "名前": f"{p.last_name} {p.first_name}",
-                    "ニックネーム": p.nickname,
-                    "グループ": p.tags,
-                    "ステータス": status_display,
-                    "最終接触": last_contact_str,
-                    "性別": p.gender,
-                    "年齢": calculate_age(p.birth_date),
-                })
+                target_val = f["val"]
 
-        if data:
-            df = pd.DataFrame(data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+                if f["op"] == "含む":
+                    if target_val.lower() not in val_to_check.lower(): match = False
+                elif f["op"] == "一致する":
+                    if target_val.lower() != val_to_check.lower(): match = False
+                elif f["op"] == "以上": # Numeric compare if possible
+                     try:
+                         if float(val_to_check) < float(target_val): match = False
+                     except: match = False
+                elif f["op"] == "以下":
+                     try:
+                         if float(val_to_check) > float(target_val): match = False
+                     except: match = False
 
-            st.markdown("### 操作")
-            selected_row_id = st.selectbox("人物を選択", [d["ID"] for d in data], format_func=lambda x: next(f"{p.last_name} {p.first_name}" for p in people if p.id == x))
+            if match:
+                filtered_people.append(p)
 
-            col_act1, col_act2, col_act3 = st.columns([1, 1, 4])
-            with col_act1:
-                if st.button("編集・詳細"):
-                    st.session_state["selected_person_id"] = selected_row_id
-                    navigate_to("ダッシュボード")
-                    st.rerun()
-
-            with col_act2:
-                if st.button("削除", type="primary"):
-                    delete_person(db, selected_row_id)
-                    st.success("削除しました。")
-                    st.rerun()
-
+        if not filtered_people:
+            st.warning("該当する人物が見つかりませんでした。")
         else:
-            st.warning("見つかりませんでした。")
+            if view_mode == "テーブル":
+                # Header
+                h1, h2, h3, h4, h5, h6, h7 = st.columns([2, 1, 2, 1, 1, 2, 3])
+                h1.markdown("**名前**")
+                h2.markdown("**性別**")
+                h3.markdown("**グループ**")
+                h4.markdown("**年齢**")
+                h5.markdown("**誕生日**")
+                h6.markdown("**最終接触**")
+                h7.markdown("**操作**")
+                st.divider()
+
+                for p in filtered_people:
+                    with st.container():
+                        last_contact = get_last_interaction_date(p.id)
+                        last_contact_str = last_contact.strftime('%Y-%m-%d') if last_contact else "なし"
+                        age = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
+
+                        # Birthday Flag (1 month)
+                        birthday_flag = ""
+                        # Logic: if birth_month/day exists
+                        if p.birth_month and p.birth_day:
+                            # Simple check: is it within next 30 days?
+                            b_date = date(today.year, p.birth_month, p.birth_day)
+                            if b_date < today:
+                                b_date = date(today.year + 1, p.birth_month, p.birth_day)
+
+                            delta = (b_date - today).days
+                            if 0 <= delta <= 30:
+                                birthday_flag = "🎂"
+                        elif p.birth_date:
+                             # Legacy
+                             b_date = date(today.year, p.birth_date.month, p.birth_date.day)
+                             if b_date < today:
+                                b_date = date(today.year + 1, p.birth_date.month, p.birth_date.day)
+                             delta = (b_date - today).days
+                             if 0 <= delta <= 30:
+                                birthday_flag = "🎂"
+
+                        # Last Contact Flag (3 months)
+                        contact_flag = ""
+                        if last_contact:
+                            delta_days = (today - last_contact).days
+                            if delta_days >= 90:
+                                contact_flag = "⚠️" # 3 months
+
+                        birthday_display = ""
+                        if p.birth_year: birthday_display += f"{p.birth_year}年"
+                        if p.birth_month: birthday_display += f"{p.birth_month}月"
+                        if p.birth_day: birthday_display += f"{p.birth_day}日"
+                        if not birthday_display and p.birth_date: birthday_display = p.birth_date.strftime('%Y/%m/%d')
+                        if birthday_flag: birthday_display += f" {birthday_flag}"
+
+                        c1, c2, c3, c4, c5, c6, c7 = st.columns([2, 1, 2, 1, 1, 2, 3])
+
+                        c1.write(f"{p.last_name} {p.first_name}")
+                        c2.write(p.gender or "-")
+                        c3.write(p.tags or "-")
+                        c4.write(str(age))
+                        c5.write(birthday_display or "-")
+                        c6.write(f"{last_contact_str} {contact_flag}")
+
+                        with c7:
+                            b1, b2, b3 = st.columns(3)
+                            with b1:
+                                if st.button("詳細", key=f"det_{p.id}"):
+                                    st.session_state["selected_person_id"] = p.id
+                                    navigate_to("ダッシュボード")
+                                    st.rerun()
+                            with b2:
+                                if st.button("編集", key=f"edit_{p.id}"):
+                                    st.session_state["edit_person_id"] = p.id
+                                    navigate_to("人物登録")
+                                    st.rerun()
+                            with b3:
+                                if st.button("削除", key=f"del_{p.id}", type="primary"):
+                                    delete_person(db, p.id)
+                                    st.rerun()
+
+            elif view_mode == "カード":
+                cols = st.columns(4)
+                for i, p in enumerate(filtered_people):
+                    with cols[i % 4]:
+                        with st.container(border=True):
+                            # Icon
+                            if p.avatar_path and os.path.exists(p.avatar_path):
+                                st.image(p.avatar_path, width=100)
+                            else:
+                                st.write("👤") # Placeholder
+
+                            # Name Button (Click to Dashboard)
+                            if st.button(f"{p.last_name} {p.first_name}", key=f"card_btn_{p.id}"):
+                                 st.session_state["selected_person_id"] = p.id
+                                 navigate_to("ダッシュボード")
+                                 st.rerun()
+
+                            st.caption(f"{p.nickname or ''}")
+                            st.write(f"**性別:** {p.gender or '-'}")
+
+                            # Age & Birthday
+                            age = calculate_age(p.birth_date, p.birth_year, p.birth_month, p.birth_day)
+                            st.write(f"**年齢:** {age}")
+
+                            # Last Contact
+                            last_contact = get_last_interaction_date(p.id)
+                            lc_str = last_contact.strftime('%Y-%m-%d') if last_contact else "なし"
+
+                            # Flags
+                            contact_flag = ""
+                            if last_contact:
+                                delta_days = (today - last_contact).days
+                                if delta_days >= 90:
+                                    contact_flag = "⚠️ 疎遠"
+
+                            st.write(f"**最終:** {lc_str}")
+                            if contact_flag:
+                                st.error(contact_flag)
+
+                            # Birthday Flag logic check again for display
+                            if p.birth_month and p.birth_day:
+                                b_date = date(today.year, p.birth_month, p.birth_day)
+                                if b_date < today: b_date = date(today.year + 1, p.birth_month, p.birth_day)
+                                delta = (b_date - today).days
+                                if 0 <= delta <= 30:
+                                    st.success("🎂 誕生日近し")
+
 
 elif page == "人物登録":
-    st.title("👤 新規人物登録")
+    st.title("👤 人物登録・編集")
 
     existing_people = get_people(db)
     existing_self = next((p for p in existing_people if p.is_self), None)
+
+    # Check for Edit Mode
+    edit_mode_id = st.session_state.get("edit_person_id", None)
+    edit_person_obj = None
+
+    # Initialize defaults
+    default_last = ""
+    default_first = ""
+    default_y_last = ""
+    default_y_first = ""
+    default_nick = ""
+    default_gender = "不明"
+    default_blood = "不明"
+    default_is_self = False
+
+    default_by = None
+    default_bm = None
+    default_bd = None
+    default_fy = date.today().year
+    default_fm = date.today().month
+    default_fd = date.today().day
+
+    default_notes = ""
+    default_strategy = ""
+    default_tags = []
+
+    if edit_mode_id:
+        edit_person_obj = get_person(db, edit_mode_id)
+        if edit_person_obj:
+            st.info(f"編集中: {edit_person_obj.last_name} {edit_person_obj.first_name}")
+            default_last = edit_person_obj.last_name
+            default_first = edit_person_obj.first_name
+            default_y_last = edit_person_obj.yomigana_last or ""
+            default_y_first = edit_person_obj.yomigana_first or ""
+            default_nick = edit_person_obj.nickname or ""
+            default_gender = edit_person_obj.gender or "不明"
+            default_blood = edit_person_obj.blood_type or "不明"
+            default_is_self = edit_person_obj.is_self
+
+            default_by = edit_person_obj.birth_year
+            default_bm = edit_person_obj.birth_month
+            default_bd = edit_person_obj.birth_day
+
+            default_fy = edit_person_obj.first_met_year
+            default_fm = edit_person_obj.first_met_month
+            default_fd = edit_person_obj.first_met_day
+
+            default_notes = edit_person_obj.notes or ""
+            default_strategy = edit_person_obj.strategy or ""
+            if edit_person_obj.tags:
+                default_tags = [t.strip() for t in edit_person_obj.tags.split(',')]
+
+            # Avatar?
+            # Handling existing avatar selection in session state is complex.
+            # We will show current avatar.
 
     # Initialize session state for temporary tags
     if "reg_temp_tags" not in st.session_state:
@@ -278,19 +486,25 @@ elif page == "人物登録":
     with col_main_l:
         # Row 1: Kana
         c_l1, c_l2 = st.columns(2)
-        with c_l1: yomigana_last = st.text_input("せい (よみがな)")
-        with c_l2: yomigana_first = st.text_input("めい (よみがな)")
+        with c_l1: yomigana_last = st.text_input("せい (よみがな)", value=default_y_last)
+        with c_l2: yomigana_first = st.text_input("めい (よみがな)", value=default_y_first)
 
         # Row 2: Kanji
         c_l3, c_l4 = st.columns(2)
-        with c_l3: last_name = st.text_input("姓 (必須)")
-        with c_l4: first_name = st.text_input("名 (必須)")
+        with c_l3: last_name = st.text_input("姓 (必須)", value=default_last)
+        with c_l4: first_name = st.text_input("名 (必須)", value=default_first)
 
         # Row 3: Nick/Gen/Blood
         c_l5, c_l6, c_l7 = st.columns([2, 1, 1])
-        with c_l5: nickname = st.text_input("ニックネーム")
-        with c_l6: gender = st.selectbox("性別", ["男性", "女性", "ノンバイナリー", "その他", "不明"])
-        with c_l7: blood_type = st.selectbox("血液型", ["A", "B", "O", "AB", "不明"])
+        with c_l5: nickname = st.text_input("ニックネーム", value=default_nick)
+        # Handle gender/blood index
+        g_opts = ["男性", "女性", "ノンバイナリー", "その他", "不明"]
+        g_idx = g_opts.index(default_gender) if default_gender in g_opts else 4
+        with c_l6: gender = st.selectbox("性別", g_opts, index=g_idx)
+
+        b_opts = ["A", "B", "O", "AB", "不明"]
+        b_idx = b_opts.index(default_blood) if default_blood in b_opts else 4
+        with c_l7: blood_type = st.selectbox("血液型", b_opts, index=b_idx)
 
     # -- RIGHT COLUMN --
     with col_main_r:
@@ -305,12 +519,16 @@ elif page == "人物登録":
         for t in st.session_state["reg_temp_tags"]:
             all_tags.add(t)
 
+        # Ensure default tags from edit are in list
+        for t in default_tags:
+            all_tags.add(t)
+
         tag_options = sorted(list(all_tags))
 
         # Layout: Group(6) | Input(3) | Button(1)
         c_g1, c_g2, c_g3 = st.columns([6, 3, 1])
         with c_g1:
-            selected_tags = st.multiselect("グループ", tag_options)
+            selected_tags = st.multiselect("グループ", tag_options, default=default_tags)
         with c_g2:
             new_tag_input = st.text_input("グループ追加", label_visibility="collapsed", placeholder="新規グループ")
         with c_g3:
@@ -320,21 +538,43 @@ elif page == "人物登録":
                     st.rerun()
 
         # Is Self Check logic
-        if existing_self:
+        if existing_self and not (edit_person_obj and edit_person_obj.is_self):
             is_self = st.checkbox("自分の情報を登録する", value=False, disabled=True, help="既に自分が登録されています")
         else:
-            is_self = st.checkbox("自分の情報を登録する")
+            is_self = st.checkbox("自分の情報を登録する", value=default_is_self)
 
         c_r1, c_r2 = st.columns(2)
         with c_r1:
-            birth_date = st.date_input("生年月日", value=None, min_value=date(1900, 1, 1))
+            st.write("生年月日")
+            by_col, bm_col, bd_col = st.columns(3)
+            with by_col:
+                # Year: 1900 to Current. Allow None.
+                birth_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_by, placeholder="不明", key="reg_by")
+            with bm_col:
+                bm_idx = default_bm if default_bm else 0
+                birth_month = st.selectbox("月", [None] + list(range(1, 13)), index=bm_idx, format_func=lambda x: f"{x}月" if x else "不明", key="reg_bm")
+            with bd_col:
+                bd_idx = default_bd if default_bd else 0
+                birth_day = st.selectbox("日", [None] + list(range(1, 32)), index=bd_idx, format_func=lambda x: f"{x}日" if x else "不明", key="reg_bd")
+
         with c_r2:
             if is_self:
-                # Grayed out / Disabled
-                st.date_input("初対面日", value=None, disabled=True, key="disabled_fmd")
-                first_met_date = None
+                st.write("初対面日 (自分)")
+                st.info("自分自身のため設定不要")
+                first_met_year = None
+                first_met_month = None
+                first_met_day = None
             else:
-                first_met_date = st.date_input("初対面日", value=date.today())
+                st.write("初対面日")
+                fy_col, fm_col, fd_col = st.columns(3)
+                with fy_col:
+                    first_met_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_fy, placeholder="不明", key="reg_fy")
+                with fm_col:
+                    fm_idx = default_fm if default_fm else 0
+                    first_met_month = st.selectbox("月", [None] + list(range(1, 13)), index=fm_idx, format_func=lambda x: f"{x}月" if x else "不明", key="reg_fm")
+                with fd_col:
+                    fd_idx = default_fd if default_fd else 0
+                    first_met_day = st.selectbox("日", [None] + list(range(1, 32)), index=fd_idx, format_func=lambda x: f"{x}日" if x else "不明", key="reg_fd")
 
     st.markdown("---")
 
@@ -373,10 +613,20 @@ elif page == "人物登録":
     st.markdown("---")
 
     # -- BOTTOM SECTION --
-    notes = st.text_area("人物詳細 (旧: メモ)")
-    strategy = st.text_area("攻略方法")
+    notes = st.text_area("人物詳細 (旧: メモ)", value=default_notes)
+    strategy = st.text_area("攻略方法", value=default_strategy)
 
-    submitted = st.button("登録", type="primary")
+    btn_label = "更新" if edit_mode_id else "登録"
+    submitted = st.button(btn_label, type="primary")
+
+    cancel_edit = False
+    if edit_mode_id:
+        if st.button("編集をキャンセル"):
+            cancel_edit = True
+
+    if cancel_edit:
+        st.session_state["edit_person_id"] = None
+        st.rerun()
 
     if submitted:
         if not last_name or not first_name:
@@ -386,11 +636,54 @@ elif page == "人物登録":
             final_tags = ", ".join(selected_tags)
 
             # Handle status
-            status = "自分" if is_self else "未設定"
+            status = "自分" if is_self else (edit_person_obj.status if edit_person_obj else "未設定")
 
-            # Create Person First to get ID
-            # Strategy included
-            new_p = create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, birth_date, gender, blood_type, status, first_met_date, notes, final_tags, None, is_self, strategy=strategy)
+            p_id_to_update = None
+
+            # Prepare Dates
+            b_y = int(birth_year) if birth_year else None
+            b_m = birth_month
+            b_d = birth_day
+
+            f_y = int(first_met_year) if first_met_year else None
+            f_m = first_met_month
+            f_d = first_met_day
+
+            # Legacy Date Calc
+            legacy_b_date = None
+            if b_y and b_m and b_d:
+                try: legacy_b_date = date(b_y, b_m, b_d)
+                except: pass
+
+            legacy_f_date = None
+            if f_y and f_m and f_d:
+                try: legacy_f_date = date(f_y, f_m, f_d)
+                except: pass
+
+            if edit_mode_id:
+                # Update
+                update_person(db, edit_mode_id,
+                              last_name=last_name, first_name=first_name,
+                              yomigana_last=yomigana_last, yomigana_first=yomigana_first,
+                              nickname=nickname, gender=gender, blood_type=blood_type,
+                              status=status, notes=notes, tags=final_tags, is_self=is_self, strategy=strategy,
+                              birth_year=b_y, birth_month=b_m, birth_day=b_d,
+                              first_met_year=f_y, first_met_month=f_m, first_met_day=f_d,
+                              birth_date=legacy_b_date, first_met_date=legacy_f_date) # Update legacy too
+                p_id_to_update = edit_mode_id
+                st.success(f"{last_name} {first_name} さんの情報を更新しました！")
+                st.session_state["edit_person_id"] = None # Exit edit mode
+            else:
+                # Create Person
+                new_p = create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, legacy_b_date, gender, blood_type, status, legacy_f_date, notes, final_tags, None, is_self, strategy=strategy,
+                                      birth_year=b_y,
+                                      birth_month=b_m,
+                                      birth_day=b_d,
+                                      first_met_year=f_y,
+                                      first_met_month=f_m,
+                                      first_met_day=f_d)
+                p_id_to_update = new_p.id
+                st.success(f"{last_name} {first_name} さんを登録しました！")
 
             # Handle Avatar Logic
             final_avatar_path = None
@@ -399,7 +692,7 @@ elif page == "人物登録":
                     selected_img_data = st.session_state["reg_uploaded_avatars"][st.session_state["reg_selected_avatar_index"]]
 
                     # Target folder: account/{id}/icon_imag/
-                    target_dir = f"account/{new_p.id}/icon_imag"
+                    target_dir = f"account/{p_id_to_update}/icon_imag"
                     os.makedirs(target_dir, exist_ok=True)
 
                     # Filename
@@ -414,12 +707,14 @@ elif page == "人物登録":
                     final_avatar_path = file_path
 
                     # Update person with avatar path
-                    update_person(db, new_p.id, avatar_path=final_avatar_path)
+                    update_person(db, p_id_to_update, avatar_path=final_avatar_path)
 
                 except Exception as e:
                     st.error(f"画像保存エラー: {e}")
 
-            st.success(f"{last_name} {first_name} さんを登録しました！")
+            if edit_mode_id:
+                 # Clean up session for temp
+                 pass
 
             # Reset temporary states
             st.session_state["reg_temp_tags"] = []
