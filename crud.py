@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from database import Person, Interaction, ProfilingData, Relationship, ProfilingQuestion, InteractionAnswer
+from database import Person, Interaction, ProfilingData, Relationship, ProfilingQuestion, InteractionAnswer, PersonHistory
 from datetime import datetime, date
 from typing import List, Optional, Dict
 import random
@@ -31,6 +31,28 @@ def create_person(db: Session, last_name: str, first_name: str, yomigana_last: O
     db.commit()
     db.refresh(new_person)
     return new_person
+
+def create_person_history(db: Session, person_id: int, date_str: str, content: str) -> PersonHistory:
+    new_history = PersonHistory(
+        person_id=person_id,
+        date_str=date_str,
+        content=content
+    )
+    db.add(new_history)
+    db.commit()
+    db.refresh(new_history)
+    return new_history
+
+def get_person_history(db: Session, person_id: int) -> List[PersonHistory]:
+    # Try to sort by date_str if possible, but it's string.
+    # We rely on user input format for sorting.
+    return db.query(PersonHistory).filter(PersonHistory.person_id == person_id).order_by(PersonHistory.date_str).all()
+
+def delete_person_history(db: Session, history_id: int):
+    history = db.query(PersonHistory).filter(PersonHistory.id == history_id).first()
+    if history:
+        db.delete(history)
+        db.commit()
 
 def get_people(db: Session) -> List[Person]:
     # Sort by yomigana if available, else kanji
