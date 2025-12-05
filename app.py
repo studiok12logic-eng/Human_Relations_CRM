@@ -240,122 +240,191 @@ if page == "人物一覧":
 elif page == "人物登録":
     st.title("👤 新規人物登録")
 
-    with st.form("register_form"):
-        is_self = st.checkbox("自分の情報を登録する")
+    existing_people = get_people(db)
+    existing_self = next((p for p in existing_people if p.is_self), None)
 
-        # Layout as requested:
-        # Left Side:
-        #  Sei / Mei (Kana)
-        #  Sei / Mei (Kanji)
-        #  Nickname / Gender / Blood Type
-        # Right Side:
-        #  Group (Existing)
-        #  Group (New)
-        #  Birth Date / First Meeting Date (Unless self)
+    # Initialize session state for temporary tags
+    if "reg_temp_tags" not in st.session_state:
+        st.session_state["reg_temp_tags"] = []
 
-        col_left, col_right = st.columns(2)
+    # Initialize session state for uploaded avatars
+    if "reg_uploaded_avatars" not in st.session_state:
+        st.session_state["reg_uploaded_avatars"] = []
 
-        with col_left:
-            # Row 1: Kana
-            c_l1, c_l2 = st.columns(2)
-            with c_l1:
-                yomigana_last = st.text_input("せい (よみがな)")
-            with c_l2:
-                yomigana_first = st.text_input("めい (よみがな)")
+    # Initialize session state for selected avatar
+    if "reg_selected_avatar_index" not in st.session_state:
+        st.session_state["reg_selected_avatar_index"] = None
 
-            # Row 2: Kanji
-            c_l3, c_l4 = st.columns(2)
-            with c_l3:
-                last_name = st.text_input("姓 (必須)")
-            with c_l4:
-                first_name = st.text_input("名 (必須)")
+    # Handle Group Add Action OUTSIDE the form to update state before render
+    # But for layout 6:3:1 on same row, we need columns.
+    # Streamlit buttons reload the page.
 
-            # Row 3: Nick/Gen/Blood
-            c_l5, c_l6, c_l7 = st.columns([2, 1, 1])
-            with c_l5:
-                nickname = st.text_input("ニックネーム")
-            with c_l6:
-                gender = st.selectbox("性別", ["男性", "女性", "ノンバイナリー", "その他", "不明"])
-            with c_l7:
-                blood_type = st.selectbox("血液型", ["A", "B", "O", "AB", "不明"])
+    # We will put the group adding logic inside the form using a button, but note that
+    # button inside form acts as submit unless there's a workaround.
+    # Actually, "Add Button" inside a form submits the form.
+    # Requirement: "Button updates group item".
+    # If the button is inside `st.form`, it submits the form.
+    # To avoid this, we should probably NOT use `st.form` for the whole page,
+    # OR we use `st.form_submit_button` for the add group button but handle logic carefully.
+    # However, standard `st.button` cannot be in `st.form`.
+    # So we should break the "one big form" pattern if we want interactive buttons.
+    # Let's break the form.
 
-        with col_right:
-            existing_people = get_people(db)
-            all_tags = set()
-            for p in existing_people:
-                if p.tags:
-                    for t in p.tags.split(','):
-                        all_tags.add(t.strip())
-            tag_options = list(all_tags)
+    st.subheader("基本情報")
 
-            selected_tags = st.multiselect("グループ (既存)", tag_options)
-            new_tags = st.text_input("新しいグループ")
+    col_main_l, col_main_r = st.columns(2)
 
-            c_r1, c_r2 = st.columns(2)
-            with c_r1:
-                birth_date = st.date_input("生年月日", value=None, min_value=date(1900, 1, 1))
-            with c_r2:
-                if is_self:
-                    st.write("初対面日: (自分)")
-                    first_met_date = None
-                else:
-                    first_met_date = st.date_input("初対面日", value=date.today())
+    # -- LEFT COLUMN --
+    with col_main_l:
+        # Row 1: Kana
+        c_l1, c_l2 = st.columns(2)
+        with c_l1: yomigana_last = st.text_input("せい (よみがな)")
+        with c_l2: yomigana_first = st.text_input("めい (よみがな)")
 
-        st.markdown("---")
-        # Bottom Section
-        # Icon / URL
-        c_b1, c_b2 = st.columns(2)
-        with c_b1:
-            uploaded_avatar = st.file_uploader("アイコン画像", type=["jpg", "png", "jpeg"])
-        with c_b2:
-            avatar_path_input = st.text_input("アイコン画像URL / パス")
+        # Row 2: Kanji
+        c_l3, c_l4 = st.columns(2)
+        with c_l3: last_name = st.text_input("姓 (必須)")
+        with c_l4: first_name = st.text_input("名 (必須)")
 
-        notes = st.text_area("メモ")
+        # Row 3: Nick/Gen/Blood
+        c_l5, c_l6, c_l7 = st.columns([2, 1, 1])
+        with c_l5: nickname = st.text_input("ニックネーム")
+        with c_l6: gender = st.selectbox("性別", ["男性", "女性", "ノンバイナリー", "その他", "不明"])
+        with c_l7: blood_type = st.selectbox("血液型", ["A", "B", "O", "AB", "不明"])
 
-        # History Input (3 rows)
-        st.write("経歴 (日付・内容)")
-        history_entries = []
-        for i in range(3):
-            c_h1, c_h2 = st.columns([1, 4])
-            with c_h1:
-                h_date = st.text_input(f"日付 (例: 2000/04)", key=f"h_date_{i}")
-            with c_h2:
-                h_content = st.text_input(f"内容", key=f"h_content_{i}")
-            if h_date or h_content:
-                history_entries.append((h_date, h_content))
+    # -- RIGHT COLUMN --
+    with col_main_r:
+        # Group Logic
+        all_tags = set()
+        for p in existing_people:
+            if p.tags:
+                for t in p.tags.split(','):
+                    all_tags.add(t.strip())
 
-        submitted = st.form_submit_button("登録")
+        # Add session tags
+        for t in st.session_state["reg_temp_tags"]:
+            all_tags.add(t)
 
-        if submitted:
-            if not last_name or not first_name:
-                st.error("姓と名は必須です。")
+        tag_options = sorted(list(all_tags))
+
+        # Layout: Group(6) | Input(3) | Button(1)
+        c_g1, c_g2, c_g3 = st.columns([6, 3, 1])
+        with c_g1:
+            selected_tags = st.multiselect("グループ", tag_options)
+        with c_g2:
+            new_tag_input = st.text_input("グループ追加", label_visibility="collapsed", placeholder="新規グループ")
+        with c_g3:
+            if st.button("追加"):
+                if new_tag_input and new_tag_input not in tag_options:
+                    st.session_state["reg_temp_tags"].append(new_tag_input)
+                    st.rerun()
+
+        # Is Self Check logic
+        if existing_self:
+            is_self = st.checkbox("自分の情報を登録する", value=False, disabled=True, help="既に自分が登録されています")
+        else:
+            is_self = st.checkbox("自分の情報を登録する")
+
+        c_r1, c_r2 = st.columns(2)
+        with c_r1:
+            birth_date = st.date_input("生年月日", value=None, min_value=date(1900, 1, 1))
+        with c_r2:
+            if is_self:
+                # Grayed out / Disabled
+                st.date_input("初対面日", value=None, disabled=True, key="disabled_fmd")
+                first_met_date = None
             else:
-                # Handle tags
-                final_tags = ", ".join(selected_tags)
-                if new_tags:
-                    if final_tags:
-                        final_tags += ", " + new_tags
-                    else:
-                        final_tags = new_tags
+                first_met_date = st.date_input("初対面日", value=date.today())
 
-                # Handle status
-                status = "自分" if is_self else "未設定"
+    st.markdown("---")
 
-                # Handle avatar
-                final_avatar_path = avatar_path_input
-                if uploaded_avatar:
-                    saved_path = save_uploaded_file(uploaded_avatar)
-                    if saved_path:
-                        final_avatar_path = saved_path
+    # -- ICON SECTION --
+    st.subheader("アイコン設定")
 
-                new_p = create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, birth_date, gender, blood_type, status, first_met_date, notes, final_tags, final_avatar_path, is_self)
+    uploaded_avatar_file = st.file_uploader("画像をアップロード", type=["jpg", "png", "jpeg"])
+    if uploaded_avatar_file:
+        # Save to session state as BytesIO or temp file
+        # We need to display it.
+        # For simplicity, we can read bytes.
+        file_bytes = uploaded_avatar_file.getvalue()
+        # Check if already in list to avoid dups on rerun
+        # Simple check by size or name?
+        # Just append for now, assuming user knows.
+        # Ideally we give it a temp ID.
+        if not any(d['name'] == uploaded_avatar_file.name for d in st.session_state["reg_uploaded_avatars"]):
+             st.session_state["reg_uploaded_avatars"].append({
+                 "name": uploaded_avatar_file.name,
+                 "bytes": file_bytes
+             })
 
-                # Handle history
-                for h_d, h_c in history_entries:
-                    if h_c: # Require content at least
-                        create_person_history(db, new_p.id, h_d, h_c)
+    # Display Images in Grid (4 per row)
+    if st.session_state["reg_uploaded_avatars"]:
+        st.write("画像を選択してください:")
+        cols = st.columns(4)
+        for i, img_data in enumerate(st.session_state["reg_uploaded_avatars"]):
+            with cols[i % 4]:
+                st.image(img_data["bytes"], width=100)
+                # Selection button
+                label = "選択中" if st.session_state["reg_selected_avatar_index"] == i else "これにする"
+                if st.button(label, key=f"sel_img_{i}", type="primary" if st.session_state["reg_selected_avatar_index"] == i else "secondary"):
+                    st.session_state["reg_selected_avatar_index"] = i
+                    st.rerun()
 
-                st.success(f"{last_name} {first_name} さんを登録しました！")
+    st.markdown("---")
+
+    # -- BOTTOM SECTION --
+    notes = st.text_area("人物詳細 (旧: メモ)")
+    strategy = st.text_area("攻略方法")
+
+    submitted = st.button("登録", type="primary")
+
+    if submitted:
+        if not last_name or not first_name:
+            st.error("姓と名は必須です。")
+        else:
+            # Handle tags
+            final_tags = ", ".join(selected_tags)
+
+            # Handle status
+            status = "自分" if is_self else "未設定"
+
+            # Create Person First to get ID
+            # Strategy included
+            new_p = create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, birth_date, gender, blood_type, status, first_met_date, notes, final_tags, None, is_self, strategy=strategy)
+
+            # Handle Avatar Logic
+            final_avatar_path = None
+            if st.session_state["reg_selected_avatar_index"] is not None:
+                try:
+                    selected_img_data = st.session_state["reg_uploaded_avatars"][st.session_state["reg_selected_avatar_index"]]
+
+                    # Target folder: account/{id}/icon_imag/
+                    target_dir = f"account/{new_p.id}/icon_imag"
+                    os.makedirs(target_dir, exist_ok=True)
+
+                    # Filename
+                    # Keep original filename or generate? keeping original seems fine but safe to timestamp
+                    file_ext = os.path.splitext(selected_img_data["name"])[1]
+                    filename = f"icon{file_ext}" # Requirement says "click icon", not specific naming, but keeping it simple.
+                    file_path = os.path.join(target_dir, filename)
+
+                    with open(file_path, "wb") as f:
+                        f.write(selected_img_data["bytes"])
+
+                    final_avatar_path = file_path
+
+                    # Update person with avatar path
+                    update_person(db, new_p.id, avatar_path=final_avatar_path)
+
+                except Exception as e:
+                    st.error(f"画像保存エラー: {e}")
+
+            st.success(f"{last_name} {first_name} さんを登録しました！")
+
+            # Reset temporary states
+            st.session_state["reg_temp_tags"] = []
+            st.session_state["reg_uploaded_avatars"] = []
+            st.session_state["reg_selected_avatar_index"] = None
 
 elif page == "交流ログ":
     st.title("📝 交流ログ")
