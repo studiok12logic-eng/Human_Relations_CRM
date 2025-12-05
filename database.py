@@ -30,10 +30,20 @@ class Person(Base):
     # Relationships
     interactions = relationship("Interaction", back_populates="person", cascade="all, delete-orphan")
     profiling_data = relationship("ProfilingData", back_populates="person", cascade="all, delete-orphan")
+    history = relationship("PersonHistory", back_populates="person", cascade="all, delete-orphan")
 
     @property
     def name(self):
         return f"{self.last_name} {self.first_name}"
+
+class PersonHistory(Base):
+    __tablename__ = 'person_history'
+    id = Column(Integer, primary_key=True)
+    person_id = Column(Integer, ForeignKey('people.id'), nullable=False)
+    date_str = Column(String) # e.g. 1999/04, 2020 Summer
+    content = Column(Text)
+
+    person = relationship("Person", back_populates="history")
 
 class Interaction(Base):
     __tablename__ = 'interactions'

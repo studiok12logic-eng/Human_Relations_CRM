@@ -15,7 +15,8 @@ from crud import (
     create_profiling_data, get_profiling_data_by_person,
     create_relationship, get_relationships_for_person, get_all_relationships,
     seed_questions, get_random_question, get_all_questions,
-    create_question, update_question, delete_question, get_question_answer_counts
+    create_question, update_question, delete_question, get_question_answer_counts,
+    create_person_history, get_person_history, delete_person_history
 )
 
 # --- Configuration & Setup ---
@@ -242,47 +243,86 @@ elif page == "人物登録":
     with st.form("register_form"):
         is_self = st.checkbox("自分の情報を登録する")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            last_name = st.text_input("姓 (必須)")
-            first_name = st.text_input("名 (必須)")
-            yomigana_last = st.text_input("姓 (よみがな)")
-            yomigana_first = st.text_input("名 (よみがな)")
-            nickname = st.text_input("ニックネーム")
+        # Layout as requested:
+        # Left Side:
+        #  Sei / Mei (Kana)
+        #  Sei / Mei (Kanji)
+        #  Nickname / Gender / Blood Type
+        # Right Side:
+        #  Group (Existing)
+        #  Group (New)
+        #  Birth Date / First Meeting Date (Unless self)
 
-        with col2:
-            gender = st.selectbox("性別", ["男性", "女性", "ノンバイナリー", "その他", "不明"])
-            blood_type = st.selectbox("血液型", ["A", "B", "O", "AB", "不明"])
+        col_left, col_right = st.columns(2)
 
+        with col_left:
+            # Row 1: Kana
+            c_l1, c_l2 = st.columns(2)
+            with c_l1:
+                yomigana_last = st.text_input("せい (よみがな)")
+            with c_l2:
+                yomigana_first = st.text_input("めい (よみがな)")
+
+            # Row 2: Kanji
+            c_l3, c_l4 = st.columns(2)
+            with c_l3:
+                last_name = st.text_input("姓 (必須)")
+            with c_l4:
+                first_name = st.text_input("名 (必須)")
+
+            # Row 3: Nick/Gen/Blood
+            c_l5, c_l6, c_l7 = st.columns([2, 1, 1])
+            with c_l5:
+                nickname = st.text_input("ニックネーム")
+            with c_l6:
+                gender = st.selectbox("性別", ["男性", "女性", "ノンバイナリー", "その他", "不明"])
+            with c_l7:
+                blood_type = st.selectbox("血液型", ["A", "B", "O", "AB", "不明"])
+
+        with col_right:
             existing_people = get_people(db)
             all_tags = set()
             for p in existing_people:
                 if p.tags:
                     for t in p.tags.split(','):
                         all_tags.add(t.strip())
-
             tag_options = list(all_tags)
+
             selected_tags = st.multiselect("グループ (既存)", tag_options)
-            new_tags = st.text_input("新しいグループ/タグ (カンマ区切り)")
+            new_tags = st.text_input("新しいグループ")
 
-            final_tags = ", ".join(selected_tags)
-            if new_tags:
-                if final_tags:
-                    final_tags += ", " + new_tags
+            c_r1, c_r2 = st.columns(2)
+            with c_r1:
+                birth_date = st.date_input("生年月日", value=None, min_value=date(1900, 1, 1))
+            with c_r2:
+                if is_self:
+                    st.write("初対面日: (自分)")
+                    first_met_date = None
                 else:
-                    final_tags = new_tags
+                    first_met_date = st.date_input("初対面日", value=date.today())
 
-            status_options = ["知人", "友人", "親友", "同僚", "家族", "VIP", "要レビュー"]
-            status = st.selectbox("ステータス", status_options)
-
-            birth_date = st.date_input("生年月日", value=None, min_value=date(1900, 1, 1))
-            first_met_date = st.date_input("初対面日", value=date.today())
-
-            # Avatar Upload
+        st.markdown("---")
+        # Bottom Section
+        # Icon / URL
+        c_b1, c_b2 = st.columns(2)
+        with c_b1:
             uploaded_avatar = st.file_uploader("アイコン画像", type=["jpg", "png", "jpeg"])
-            avatar_path_input = st.text_input("アイコン画像URL / パス (手動入力)")
+        with c_b2:
+            avatar_path_input = st.text_input("アイコン画像URL / パス")
 
         notes = st.text_area("メモ")
+
+        # History Input (3 rows)
+        st.write("経歴 (日付・内容)")
+        history_entries = []
+        for i in range(3):
+            c_h1, c_h2 = st.columns([1, 4])
+            with c_h1:
+                h_date = st.text_input(f"日付 (例: 2000/04)", key=f"h_date_{i}")
+            with c_h2:
+                h_content = st.text_input(f"内容", key=f"h_content_{i}")
+            if h_date or h_content:
+                history_entries.append((h_date, h_content))
 
         submitted = st.form_submit_button("登録")
 
@@ -290,6 +330,17 @@ elif page == "人物登録":
             if not last_name or not first_name:
                 st.error("姓と名は必須です。")
             else:
+                # Handle tags
+                final_tags = ", ".join(selected_tags)
+                if new_tags:
+                    if final_tags:
+                        final_tags += ", " + new_tags
+                    else:
+                        final_tags = new_tags
+
+                # Handle status
+                status = "自分" if is_self else "未設定"
+
                 # Handle avatar
                 final_avatar_path = avatar_path_input
                 if uploaded_avatar:
@@ -297,7 +348,13 @@ elif page == "人物登録":
                     if saved_path:
                         final_avatar_path = saved_path
 
-                create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, birth_date, gender, blood_type, status, first_met_date, notes, final_tags, final_avatar_path, is_self)
+                new_p = create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, birth_date, gender, blood_type, status, first_met_date, notes, final_tags, final_avatar_path, is_self)
+
+                # Handle history
+                for h_d, h_c in history_entries:
+                    if h_c: # Require content at least
+                        create_person_history(db, new_p.id, h_d, h_c)
+
                 st.success(f"{last_name} {first_name} さんを登録しました！")
 
 elif page == "交流ログ":
@@ -403,6 +460,7 @@ elif page == "ダッシュボード":
         person = get_person(db, selected_id)
         interactions = get_interactions_by_person(db, selected_id)
         relationships = get_relationships_for_person(db, selected_id)
+        history = get_person_history(db, selected_id)
 
         # --- HEADER & EDIT ---
         with st.expander("👤 人物情報の編集", expanded=False):
@@ -417,6 +475,11 @@ elif page == "ダッシュボード":
                 # Update Avatar
                 uploaded_avatar = st.file_uploader("アイコン画像更新", type=["jpg", "png", "jpeg"])
 
+                st.markdown("---")
+                st.write("経歴の追加")
+                new_hist_date = st.text_input("日付 (例: 2010/04)")
+                new_hist_content = st.text_input("内容")
+
                 if st.form_submit_button("保存"):
                     new_avatar_path = person.avatar_path
                     if uploaded_avatar:
@@ -427,6 +490,9 @@ elif page == "ダッシュボード":
                     if new_avatar_path != person.avatar_path:
                         update_person(db, person.id, avatar_path=new_avatar_path)
 
+                    if new_hist_content:
+                        create_person_history(db, person.id, new_hist_date, new_hist_content)
+
                     st.success("更新しました。")
                     st.rerun()
 
@@ -434,6 +500,18 @@ elif page == "ダッシュボード":
                      delete_person(db, person.id)
                      st.warning("削除しました。")
                      st.rerun()
+
+            # Manage History
+            if history:
+                st.markdown("##### 経歴の管理")
+                for h in history:
+                    c1, c2, c3 = st.columns([1, 4, 1])
+                    with c1: st.write(h.date_str or "---")
+                    with c2: st.write(h.content)
+                    with c3:
+                        if st.button("🗑️", key=f"del_hist_{h.id}"):
+                            delete_person_history(db, h.id)
+                            st.rerun()
 
         col_h1, col_h2 = st.columns([1, 3])
         with col_h1:
@@ -455,6 +533,11 @@ elif page == "ダッシュボード":
             st.markdown(f"**性別:** {person.gender} | **年齢:** {calculate_age(person.birth_date)}")
             if person.prediction_notes:
                 st.info(f"🔮 **予想・付き合い方:** {person.prediction_notes}")
+
+            if history:
+                with st.expander("📜 経歴", expanded=True):
+                    for h in history:
+                        st.markdown(f"- **{h.date_str or '---'}**: {h.content}")
 
         st.divider()
 
