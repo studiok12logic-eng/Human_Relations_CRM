@@ -2,3 +2,5 @@ streamlit
 sqlalchemy
 pandas
 pyvis
+streamlit-cropper
+Pillow
