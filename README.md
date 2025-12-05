@@ -21,3 +21,16 @@ python -m venv .venv
 
 # 仮想環境を有効化（左端に (.venv) と出れば成功）
 .venv\Scripts\activate
+```
+
+### ② ライブラリのインストール
+必要なツール（ライブラリ）を一括でインストールします。
+```bash
+pip install -r requirements.txt
+```
+
+## 3. アプリの起動
+以下のコマンドでアプリを立ち上げます。
+```bash
+streamlit run app.py
+```
