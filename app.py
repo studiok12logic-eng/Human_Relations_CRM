@@ -7,6 +7,8 @@ import tempfile
 import os
 import random
 from PIL import Image
+from streamlit_cropper import st_cropper
+from io import BytesIO
 
 from database import init_db, get_db, Person, InteractionAnswer, ProfilingQuestion
 from crud import (
@@ -393,6 +395,10 @@ if page == "人物一覧":
 elif page == "人物登録":
     st.title("👤 人物登録・編集")
 
+    # Initialize uploader key
+    if "uploader_key" not in st.session_state:
+        st.session_state["uploader_key"] = 0
+
     existing_people = get_people(db)
     existing_self = next((p for p in existing_people if p.is_self), None)
 
@@ -463,50 +469,54 @@ elif page == "人物登録":
     if "reg_selected_avatar_index" not in st.session_state:
         st.session_state["reg_selected_avatar_index"] = None
 
-    # Handle Group Add Action OUTSIDE the form to update state before render
-    # But for layout 6:3:1 on same row, we need columns.
-    # Streamlit buttons reload the page.
 
-    # We will put the group adding logic inside the form using a button, but note that
-    # button inside form acts as submit unless there's a workaround.
-    # Actually, "Add Button" inside a form submits the form.
-    # Requirement: "Button updates group item".
-    # If the button is inside `st.form`, it submits the form.
-    # To avoid this, we should probably NOT use `st.form` for the whole page,
-    # OR we use `st.form_submit_button` for the add group button but handle logic carefully.
-    # However, standard `st.button` cannot be in `st.form`.
-    # So we should break the "one big form" pattern if we want interactive buttons.
-    # Let's break the form.
+    # Header with Is Self Checkbox
+    c_head_1, c_head_2 = st.columns([1, 2])
+    with c_head_1:
+        st.subheader("基本情報")
+    with c_head_2:
+        # Is Self Check logic
+        if existing_self and not (edit_person_obj and edit_person_obj.is_self):
+            is_self = st.checkbox("自分の情報を登録する", value=False, disabled=True, help="既に自分が登録されています")
+        else:
+            is_self = st.checkbox("自分の情報を登録する", value=default_is_self)
 
-    st.subheader("基本情報")
 
     col_main_l, col_main_r = st.columns(2)
 
-    # -- LEFT COLUMN --
+    # -- LEFT COLUMN (Basic Info) --
     with col_main_l:
-        # Row 1: Kana
-        c_l1, c_l2 = st.columns(2)
-        with c_l1: yomigana_last = st.text_input("せい (よみがな)", value=default_y_last)
-        with c_l2: yomigana_first = st.text_input("めい (よみがな)", value=default_y_first)
+        # Grouped Name Inputs: [Last Name Col] [First Name Col]
+        c_n_last, c_n_first = st.columns(2)
 
-        # Row 2: Kanji
-        c_l3, c_l4 = st.columns(2)
-        with c_l3: last_name = st.text_input("姓 (必須)", value=default_last)
-        with c_l4: first_name = st.text_input("名 (必須)", value=default_first)
+        with c_n_last:
+            last_name = st.text_input("姓", value=default_last, label_visibility="collapsed", placeholder="姓")
+            yomigana_last = st.text_input("せい", value=default_y_last, label_visibility="collapsed", placeholder="せい")
 
-        # Row 3: Nick/Gen/Blood
-        c_l5, c_l6, c_l7 = st.columns([2, 1, 1])
-        with c_l5: nickname = st.text_input("ニックネーム", value=default_nick)
-        # Handle gender/blood index
-        g_opts = ["男性", "女性", "ノンバイナリー", "その他", "不明"]
-        g_idx = g_opts.index(default_gender) if default_gender in g_opts else 4
-        with c_l6: gender = st.selectbox("性別", g_opts, index=g_idx)
+        with c_n_first:
+            first_name = st.text_input("名", value=default_first, label_visibility="collapsed", placeholder="名")
+            yomigana_first = st.text_input("めい", value=default_y_first, label_visibility="collapsed", placeholder="めい")
 
-        b_opts = ["A", "B", "O", "AB", "不明"]
-        b_idx = b_opts.index(default_blood) if default_blood in b_opts else 4
-        with c_l7: blood_type = st.selectbox("血液型", b_opts, index=b_idx)
+        st.write("") # Spacer
 
-    # -- RIGHT COLUMN --
+        # Nick, Gender, Blood
+        nickname = st.text_input("ニックネーム", value=default_nick, label_visibility="collapsed", placeholder="ニックネーム")
+
+        c_l5, c_l6 = st.columns(2)
+        with c_l5:
+            g_opts = ["男性", "女性", "ノンバイナリー", "その他", "不明"]
+            g_idx = g_opts.index(default_gender) if default_gender in g_opts else 4
+            # For selectbox, label_visibility="collapsed" is risky if not clear.
+            # But requested.
+            gender = st.selectbox("性別", g_opts, index=g_idx, label_visibility="collapsed")
+
+        with c_l6:
+            b_opts = ["A", "B", "O", "AB", "不明"]
+            b_idx = b_opts.index(default_blood) if default_blood in b_opts else 4
+            blood_type = st.selectbox("血液型", b_opts, index=b_idx, label_visibility="collapsed")
+
+
+    # -- RIGHT COLUMN (Group & Dates) --
     with col_main_r:
         # Group Logic
         all_tags = set()
@@ -514,53 +524,44 @@ elif page == "人物登録":
             if p.tags:
                 for t in p.tags.split(','):
                     all_tags.add(t.strip())
-
-        # Add session tags
         for t in st.session_state["reg_temp_tags"]:
             all_tags.add(t)
-
-        # Ensure default tags from edit are in list
         for t in default_tags:
             all_tags.add(t)
-
         tag_options = sorted(list(all_tags))
 
-        # Layout: Group(6) | Input(3) | Button(1)
-        c_g1, c_g2, c_g3 = st.columns([6, 3, 1])
-        with c_g1:
-            selected_tags = st.multiselect("グループ", tag_options, default=default_tags)
-        with c_g2:
+        selected_tags = st.multiselect("グループ", tag_options, default=default_tags)
+
+        # New Group Input & Button (Below)
+        c_g_in, c_g_btn = st.columns([3, 1])
+        with c_g_in:
             new_tag_input = st.text_input("グループ追加", label_visibility="collapsed", placeholder="新規グループ")
-        with c_g3:
-            if st.button("追加"):
+        with c_g_btn:
+             if st.button("追加"):
                 if new_tag_input and new_tag_input not in tag_options:
                     st.session_state["reg_temp_tags"].append(new_tag_input)
                     st.rerun()
 
-        # Is Self Check logic
-        if existing_self and not (edit_person_obj and edit_person_obj.is_self):
-            is_self = st.checkbox("自分の情報を登録する", value=False, disabled=True, help="既に自分が登録されています")
-        else:
-            is_self = st.checkbox("自分の情報を登録する", value=default_is_self)
+        st.write("") # Spacer
 
+        # Dates (Keep Labels)
         c_r1, c_r2 = st.columns(2)
         with c_r1:
             st.write("生年月日")
             by_col, bm_col, bd_col = st.columns(3)
             with by_col:
-                # Year: 1900 to Current. Allow None.
-                birth_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_by, placeholder="不明", key="reg_by")
+                birth_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_by, placeholder="不明", key="reg_by", label_visibility="collapsed")
             with bm_col:
                 bm_idx = default_bm if default_bm else 0
-                birth_month = st.selectbox("月", [None] + list(range(1, 13)), index=bm_idx, format_func=lambda x: f"{x}月" if x else "不明", key="reg_bm")
+                birth_month = st.selectbox("月", [None] + list(range(1, 13)), index=bm_idx, format_func=lambda x: f"{x}月" if x else "月", key="reg_bm", label_visibility="collapsed")
             with bd_col:
                 bd_idx = default_bd if default_bd else 0
-                birth_day = st.selectbox("日", [None] + list(range(1, 32)), index=bd_idx, format_func=lambda x: f"{x}日" if x else "不明", key="reg_bd")
+                birth_day = st.selectbox("日", [None] + list(range(1, 32)), index=bd_idx, format_func=lambda x: f"{x}日" if x else "日", key="reg_bd", label_visibility="collapsed")
 
         with c_r2:
             if is_self:
                 st.write("初対面日 (自分)")
-                st.info("自分自身のため設定不要")
+                st.info("設定不要")
                 first_met_year = None
                 first_met_month = None
                 first_met_day = None
@@ -568,44 +569,76 @@ elif page == "人物登録":
                 st.write("初対面日")
                 fy_col, fm_col, fd_col = st.columns(3)
                 with fy_col:
-                    first_met_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_fy, placeholder="不明", key="reg_fy")
+                    first_met_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_fy, placeholder="不明", key="reg_fy", label_visibility="collapsed")
                 with fm_col:
                     fm_idx = default_fm if default_fm else 0
-                    first_met_month = st.selectbox("月", [None] + list(range(1, 13)), index=fm_idx, format_func=lambda x: f"{x}月" if x else "不明", key="reg_fm")
+                    first_met_month = st.selectbox("月", [None] + list(range(1, 13)), index=fm_idx, format_func=lambda x: f"{x}月" if x else "月", key="reg_fm", label_visibility="collapsed")
                 with fd_col:
                     fd_idx = default_fd if default_fd else 0
-                    first_met_day = st.selectbox("日", [None] + list(range(1, 32)), index=fd_idx, format_func=lambda x: f"{x}日" if x else "不明", key="reg_fd")
+                    first_met_day = st.selectbox("日", [None] + list(range(1, 32)), index=fd_idx, format_func=lambda x: f"{x}日" if x else "日", key="reg_fd", label_visibility="collapsed")
 
     st.markdown("---")
 
     # -- ICON SECTION --
     st.subheader("アイコン設定")
 
-    uploaded_avatar_file = st.file_uploader("画像をアップロード", type=["jpg", "png", "jpeg"])
-    if uploaded_avatar_file:
-        # Save to session state as BytesIO or temp file
-        # We need to display it.
-        # For simplicity, we can read bytes.
-        file_bytes = uploaded_avatar_file.getvalue()
-        # Check if already in list to avoid dups on rerun
-        # Simple check by size or name?
-        # Just append for now, assuming user knows.
-        # Ideally we give it a temp ID.
-        if not any(d['name'] == uploaded_avatar_file.name for d in st.session_state["reg_uploaded_avatars"]):
-             st.session_state["reg_uploaded_avatars"].append({
-                 "name": uploaded_avatar_file.name,
-                 "bytes": file_bytes
-             })
+    # Uploader with dynamic key to clear
+    uploaded_avatar_file = st.file_uploader("画像をアップロード", type=["jpg", "png", "jpeg"], key=f"avatar_uploader_{st.session_state['uploader_key']}")
 
-    # Display Images in Grid (4 per row)
+    if uploaded_avatar_file:
+        img = Image.open(uploaded_avatar_file)
+        w, h = img.size
+
+        # Check Aspect Ratio (Allow small tolerance)
+        # If not square, show cropper
+        if abs(w - h) > 2:
+            st.info("アスペクト比が1:1ではありません。切り抜き範囲を指定してください。")
+            cropped_img = st_cropper(img, aspect_ratio=(1, 1), box_color='#FF0000')
+            if st.button("切り抜きを確定して追加"):
+                # Resize
+                resized = cropped_img.resize((200, 200))
+                # Save to session
+                # Convert to bytes
+                buf = BytesIO()
+                resized.save(buf, format="PNG")
+                byte_im = buf.getvalue()
+
+                st.session_state["reg_uploaded_avatars"].append({
+                    "name": f"crop_{uploaded_avatar_file.name}",
+                    "bytes": byte_im
+                })
+                # Clear uploader
+                st.session_state["uploader_key"] += 1
+                st.rerun()
+        else:
+            # Already square. Resize and confirm?
+            # User said "Image name should be hidden after upload".
+            # So we should process it.
+            # But to hide it, we must clear uploader, which requires rerun.
+            # So we can auto-add it.
+            resized = img.resize((200, 200))
+            buf = BytesIO()
+            resized.save(buf, format="PNG")
+            byte_im = buf.getvalue()
+
+            st.session_state["reg_uploaded_avatars"].append({
+                "name": uploaded_avatar_file.name,
+                "bytes": byte_im
+            })
+            st.session_state["uploader_key"] += 1
+            st.rerun()
+
+
+    # Display Images in Grid (8 per row)
     if st.session_state["reg_uploaded_avatars"]:
         st.write("画像を選択してください:")
-        cols = st.columns(4)
+        # Use simple iteration for grid
+        cols = st.columns(8)
         for i, img_data in enumerate(st.session_state["reg_uploaded_avatars"]):
-            with cols[i % 4]:
-                st.image(img_data["bytes"], width=100)
+            with cols[i % 8]:
+                st.image(img_data["bytes"], width=80) # Slightly smaller for 8 cols
                 # Selection button
-                label = "選択中" if st.session_state["reg_selected_avatar_index"] == i else "これにする"
+                label = "✔" if st.session_state["reg_selected_avatar_index"] == i else "〇"
                 if st.button(label, key=f"sel_img_{i}", type="primary" if st.session_state["reg_selected_avatar_index"] == i else "secondary"):
                     st.session_state["reg_selected_avatar_index"] = i
                     st.rerun()
@@ -629,8 +662,8 @@ elif page == "人物登録":
         st.rerun()
 
     if submitted:
-        if not last_name or not first_name:
-            st.error("姓と名は必須です。")
+        if not last_name and not first_name:
+            st.error("姓または名のどちらかは必須です。")
         else:
             # Handle tags
             final_tags = ", ".join(selected_tags)
