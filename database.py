@@ -16,6 +16,10 @@ class Person(Base):
     first_met_date = Column(Date)
     notes = Column(Text)
 
+    # New columns
+    tags = Column(String) # Chunking/Group
+    mbti_result = Column(String) # MBTI Result
+
     # Relationships
     interactions = relationship("Interaction", back_populates="person", cascade="all, delete-orphan")
     profiling_data = relationship("ProfilingData", back_populates="person", cascade="all, delete-orphan")
