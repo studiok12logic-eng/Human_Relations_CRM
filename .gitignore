@@ -1,0 +1,19 @@
+# --- 最重要：個人情報とDB ---
+*.db
+human_crm.db
+*.sqlite3
+
+# --- 最重要：パスワードと秘密鍵 ---
+.streamlit/secrets.toml
+.env
+
+# --- システム・環境ファイル（ゴミ） ---
+__pycache__/
+.venv/
+env/
+venv/
+.DS_Store
+*.pyc
+
+# --- ログファイルなど ---
+*.log
