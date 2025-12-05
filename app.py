@@ -471,7 +471,7 @@ elif page == "人物登録":
 
 
     # Header with Is Self Checkbox
-    c_head_1, c_head_2 = st.columns([1, 2])
+    c_head_1, c_head_2 = st.columns([3, 1])
     with c_head_1:
         st.subheader("基本情報")
     with c_head_2:
@@ -504,15 +504,21 @@ elif page == "人物登録":
 
         c_l5, c_l6 = st.columns(2)
         with c_l5:
-            g_opts = ["男性", "女性", "ノンバイナリー", "その他", "不明"]
-            g_idx = g_opts.index(default_gender) if default_gender in g_opts else 4
+            g_opts = ["男性", "女性", "ノンバイナリー", "その他", "性別不明"]
+            g_default_val = default_gender
+            if g_default_val == "不明": g_default_val = "性別不明"
+
+            g_idx = g_opts.index(g_default_val) if g_default_val in g_opts else 4
             # For selectbox, label_visibility="collapsed" is risky if not clear.
             # But requested.
             gender = st.selectbox("性別", g_opts, index=g_idx, label_visibility="collapsed")
 
         with c_l6:
-            b_opts = ["A", "B", "O", "AB", "不明"]
-            b_idx = b_opts.index(default_blood) if default_blood in b_opts else 4
+            b_opts = ["A", "B", "O", "AB", "血液型不明"]
+            b_default_val = default_blood
+            if b_default_val == "不明": b_default_val = "血液型不明"
+
+            b_idx = b_opts.index(b_default_val) if b_default_val in b_opts else 4
             blood_type = st.selectbox("血液型", b_opts, index=b_idx, label_visibility="collapsed")
 
 
@@ -530,7 +536,7 @@ elif page == "人物登録":
             all_tags.add(t)
         tag_options = sorted(list(all_tags))
 
-        selected_tags = st.multiselect("グループ", tag_options, default=default_tags)
+        selected_tags = st.multiselect("グループ", tag_options, default=default_tags, label_visibility="collapsed")
 
         # New Group Input & Button (Below)
         c_g_in, c_g_btn = st.columns([3, 1])
@@ -544,29 +550,35 @@ elif page == "人物登録":
 
         st.write("") # Spacer
 
-        # Dates (Keep Labels)
-        c_r1, c_r2 = st.columns(2)
-        with c_r1:
-            st.write("生年月日")
-            by_col, bm_col, bd_col = st.columns(3)
-            with by_col:
+        # Dates (Rows)
+        # Row 1: Birth Date
+        d_row1_1, d_row1_2 = st.columns([1, 4])
+        with d_row1_1:
+             st.write("生年月日")
+
+        with d_row1_2:
+             by_col, bm_col, bd_col = st.columns(3)
+             with by_col:
                 birth_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_by, placeholder="不明", key="reg_by", label_visibility="collapsed")
-            with bm_col:
+             with bm_col:
                 bm_idx = default_bm if default_bm else 0
                 birth_month = st.selectbox("月", [None] + list(range(1, 13)), index=bm_idx, format_func=lambda x: f"{x}月" if x else "月", key="reg_bm", label_visibility="collapsed")
-            with bd_col:
+             with bd_col:
                 bd_idx = default_bd if default_bd else 0
                 birth_day = st.selectbox("日", [None] + list(range(1, 32)), index=bd_idx, format_func=lambda x: f"{x}日" if x else "日", key="reg_bd", label_visibility="collapsed")
 
-        with c_r2:
+        # Row 2: First Met
+        d_row2_1, d_row2_2 = st.columns([1, 4])
+        with d_row2_1:
+             st.write("初対面日")
+
+        with d_row2_2:
             if is_self:
-                st.write("初対面日 (自分)")
                 st.info("設定不要")
                 first_met_year = None
                 first_met_month = None
                 first_met_day = None
             else:
-                st.write("初対面日")
                 fy_col, fm_col, fd_col = st.columns(3)
                 with fy_col:
                     first_met_year = st.number_input("年", min_value=1900, max_value=date.today().year, value=default_fy, placeholder="不明", key="reg_fy", label_visibility="collapsed")
