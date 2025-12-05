@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import streamlit.components.v1 as components
 from pyvis.network import Network
 import tempfile
 import os
 import random
+from PIL import Image
 
 from database import init_db, get_db, Person, InteractionAnswer, ProfilingQuestion
 from crud import (
@@ -25,21 +26,35 @@ init_db()
 db = next(get_db())
 seed_questions(db)
 
+# --- Constants ---
+RELATIONSHIP_TEMPLATES = [
+    {"label": "親子", "forward": "親", "backward": "子", "type": "vertical"},
+    {"label": "兄弟姉妹", "forward": "兄・姉", "backward": "弟・妹", "type": "vertical"},
+    {"label": "夫婦・パートナー", "forward": "パートナー", "backward": "パートナー", "type": "horizontal"},
+    {"label": "上司・部下", "forward": "上司", "backward": "部下", "type": "vertical"},
+    {"label": "先輩・後輩", "forward": "先輩", "backward": "後輩", "type": "vertical"},
+    {"label": "師弟", "forward": "師匠", "backward": "弟子", "type": "vertical"},
+    {"label": "同僚", "forward": "同僚", "backward": "同僚", "type": "horizontal"},
+    {"label": "友人", "forward": "友人", "backward": "友人", "type": "horizontal"},
+    {"label": "ライバル", "forward": "ライバル", "backward": "ライバル", "type": "horizontal"},
+]
+
 # --- Navigation State Management ---
 if "current_page" not in st.session_state:
     st.session_state["current_page"] = "人物一覧"
 
 def navigate_to(page_name):
     st.session_state["current_page"] = page_name
-    # Since we can't programmatically set the sidebar widget value easily without rerun/key hacks,
-    # we just update state and hope the user flows naturally, or we use a hack.
-    # The hack is to use the key in the radio button equal to a session state var.
 
 # --- Sidebar Navigation ---
 st.sidebar.title("🧩 メニュー")
-# Use index to control selection
 page_options = ["人物一覧", "人物登録", "交流ログ", "ダッシュボード", "相関図", "質問リスト"]
-# Find current index
+
+# Global Search
+st.sidebar.markdown("---")
+search_keyword = st.sidebar.text_input("🔍 全文検索", placeholder="名前、タグ、内容...")
+
+# Page Selection
 try:
     current_index = page_options.index(st.session_state["current_page"])
 except ValueError:
@@ -47,7 +62,6 @@ except ValueError:
 
 page = st.sidebar.radio("移動", page_options, index=current_index, key="nav_radio")
 
-# Update state if changed via sidebar
 if page != st.session_state["current_page"]:
     st.session_state["current_page"] = page
     st.rerun()
@@ -58,6 +72,88 @@ def calculate_age(born):
         return "不明"
     today = date.today()
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+def get_last_interaction_date(person_id):
+    interactions = get_interactions_by_person(db, person_id)
+    if interactions:
+        return interactions[0].entry_date
+    return None
+
+def save_uploaded_file(uploaded_file):
+    if uploaded_file is not None:
+        try:
+            # Create assets/avatars directory if not exists
+            upload_dir = "assets/avatars"
+            os.makedirs(upload_dir, exist_ok=True)
+
+            # Generate unique filename
+            file_ext = os.path.splitext(uploaded_file.name)[1]
+            filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}{file_ext}"
+            file_path = os.path.join(upload_dir, filename)
+
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+
+            return file_path
+        except Exception as e:
+            st.error(f"画像の保存に失敗しました: {e}")
+            return None
+    return None
+
+# --- Global Search Logic ---
+if search_keyword:
+    st.title("🔍 検索結果")
+    st.write(f"検索キーワード: **{search_keyword}**")
+
+    # Search People
+    people = get_people(db)
+    matched_people = []
+    for p in people:
+        target = f"{p.last_name} {p.first_name} {p.nickname} {p.tags} {p.status} {p.notes or ''} {p.prediction_notes or ''}"
+        if search_keyword.lower() in target.lower():
+            matched_people.append(p)
+
+    if matched_people:
+        st.subheader("👤 人物")
+        for p in matched_people:
+            with st.expander(f"{p.last_name} {p.first_name}"):
+                st.write(f"ステータス: {p.status} | タグ: {p.tags}")
+                if st.button("詳細へ", key=f"search_p_{p.id}"):
+                    st.session_state["selected_person_id"] = p.id
+                    navigate_to("ダッシュボード")
+                    st.rerun()
+
+    # Search Interactions
+    # This is inefficient for large DBs but fine for local tool
+    # Iterate all people to get interactions
+    matched_interactions = []
+    for p in people:
+        interactions = get_interactions_by_person(db, p.id)
+        for i in interactions:
+            target = f"{i.content} {i.user_feeling or ''} {i.tags or ''} {i.category or ''} {i.channel or ''}"
+            # Check answers
+            for ans in i.answers:
+                 target += f" {ans.answer_value}"
+
+            if search_keyword.lower() in target.lower():
+                matched_interactions.append(i)
+
+    if matched_interactions:
+        st.subheader("📝 交流ログ")
+        for i in matched_interactions:
+            p = next((x for x in people if x.id == i.person_id), None)
+            name = f"{p.last_name} {p.first_name}" if p else "Unknown"
+            with st.expander(f"{i.entry_date} - {name} ({i.category})"):
+                st.write(i.content)
+                if st.button("人物ダッシュボードへ", key=f"search_i_{i.id}"):
+                    st.session_state["selected_person_id"] = i.person_id
+                    navigate_to("ダッシュボード")
+                    st.rerun()
+
+    if not matched_people and not matched_interactions:
+        st.warning("見つかりませんでした。")
+
+    st.divider()
 
 # --- Pages ---
 
@@ -71,30 +167,48 @@ if page == "人物一覧":
     else:
         col_search, col_sort = st.columns([3, 1])
         with col_search:
-            search_query = st.text_input("検索 (名前・タグ・ステータス)", "")
+            search_query = st.text_input("一覧内フィルタ (名前・タグ・ステータス)", "")
         with col_sort:
             sort_option = st.selectbox("並び替え", ["名前順", "グループ順", "ステータス順"])
 
-        # Sorting logic (simple)
+        # Sorting logic
         sorted_people = people
         if sort_option == "グループ順":
             sorted_people = sorted(people, key=lambda x: x.tags if x.tags else "zzz")
         elif sort_option == "ステータス順":
             sorted_people = sorted(people, key=lambda x: x.status if x.status else "zzz")
-        # Default is already sorted by yomigana in CRUD
 
-        # Display as a table (using DataFrame for better sorting/filtering)
+        # Display as a table with calculated fields
         data = []
+        today = date.today()
+
         for p in sorted_people:
             # Search filter
             search_target = f"{p.last_name} {p.first_name} {p.nickname} {p.tags} {p.status}"
             if search_query.lower() in search_target.lower():
+                # Last Contact Logic
+                last_contact = get_last_interaction_date(p.id)
+                last_contact_str = last_contact.strftime('%Y-%m-%d') if last_contact else "なし"
+
+                alert_color = None
+                if last_contact:
+                    delta_days = (today - last_contact).days
+                    if delta_days >= 180: # 6 months
+                        alert_color = "🔴" # Red
+                    elif delta_days >= 90: # 3 months
+                        alert_color = "🟡" # Yellow
+
+                status_display = p.status
+                if alert_color:
+                    status_display = f"{alert_color} {p.status}"
+
                 data.append({
                     "ID": p.id,
                     "名前": f"{p.last_name} {p.first_name}",
                     "ニックネーム": p.nickname,
                     "グループ": p.tags,
-                    "ステータス": p.status,
+                    "ステータス": status_display,
+                    "最終接触": last_contact_str,
                     "性別": p.gender,
                     "年齢": calculate_age(p.birth_date),
                 })
@@ -126,7 +240,6 @@ elif page == "人物登録":
     st.title("👤 新規人物登録")
 
     with st.form("register_form"):
-        # Special 'Self' registration check
         is_self = st.checkbox("自分の情報を登録する")
 
         col1, col2 = st.columns(2)
@@ -141,8 +254,6 @@ elif page == "人物登録":
             gender = st.selectbox("性別", ["男性", "女性", "ノンバイナリー", "その他", "不明"])
             blood_type = st.selectbox("血液型", ["A", "B", "O", "AB", "不明"])
 
-            # Group selection - allow adding new
-            # Get existing tags
             existing_people = get_people(db)
             all_tags = set()
             for p in existing_people:
@@ -154,7 +265,6 @@ elif page == "人物登録":
             selected_tags = st.multiselect("グループ (既存)", tag_options)
             new_tags = st.text_input("新しいグループ/タグ (カンマ区切り)")
 
-            # Combine tags
             final_tags = ", ".join(selected_tags)
             if new_tags:
                 if final_tags:
@@ -162,15 +272,15 @@ elif page == "人物登録":
                 else:
                     final_tags = new_tags
 
-            # Status - configurable? For now hardcoded list + "Other"
             status_options = ["知人", "友人", "親友", "同僚", "家族", "VIP", "要レビュー"]
             status = st.selectbox("ステータス", status_options)
 
             birth_date = st.date_input("生年月日", value=None, min_value=date(1900, 1, 1))
             first_met_date = st.date_input("初対面日", value=date.today())
 
-            # Avatar (URL or Path)
-            avatar_path = st.text_input("アイコン画像URL / パス")
+            # Avatar Upload
+            uploaded_avatar = st.file_uploader("アイコン画像", type=["jpg", "png", "jpeg"])
+            avatar_path_input = st.text_input("アイコン画像URL / パス (手動入力)")
 
         notes = st.text_area("メモ")
 
@@ -180,7 +290,14 @@ elif page == "人物登録":
             if not last_name or not first_name:
                 st.error("姓と名は必須です。")
             else:
-                create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, birth_date, gender, blood_type, status, first_met_date, notes, final_tags, avatar_path, is_self)
+                # Handle avatar
+                final_avatar_path = avatar_path_input
+                if uploaded_avatar:
+                    saved_path = save_uploaded_file(uploaded_avatar)
+                    if saved_path:
+                        final_avatar_path = saved_path
+
+                create_person(db, last_name, first_name, yomigana_last, yomigana_first, nickname, birth_date, gender, blood_type, status, first_met_date, notes, final_tags, final_avatar_path, is_self)
                 st.success(f"{last_name} {first_name} さんを登録しました！")
 
 elif page == "交流ログ":
@@ -192,7 +309,6 @@ elif page == "交流ログ":
     else:
         # Select Person
         person_options = {p.id: f"{p.last_name} {p.first_name}" for p in people}
-        # Pre-select if passed from other page
         default_index = 0
         if "selected_person_id" in st.session_state and st.session_state["selected_person_id"] in person_options:
             try:
@@ -203,23 +319,26 @@ elif page == "交流ログ":
 
         person_id = st.selectbox("人物を選択", options=person_options.keys(), format_func=lambda x: person_options[x], index=default_index)
 
-        # Get answer counts for this person
         answer_counts = get_question_answer_counts(db, person_id)
 
         with st.form("interaction_form"):
             col1, col2 = st.columns(2)
             with col1:
                 i_date = st.date_input("入力日", value=date.today())
-
-                # Fuzzy Period
                 start_date_str = st.text_input("開始期間 (例: 2024/04/01, 2024年春)")
                 end_date_str = st.text_input("終了期間 (例: 2024/04/05, 現在)")
 
             with col2:
-                category = st.selectbox("カテゴリ", ["会話", "食事", "イベント", "観察", "連絡", "その他"])
+                # Extended Categories
+                cat_options = ["会話", "食事", "イベント", "観察", "連絡", "Gift/貸借", "Collaboration", "その他"]
+                category = st.selectbox("カテゴリ", cat_options)
                 category_new = st.text_input("カテゴリ追加 (上記にない場合)")
                 if category_new:
                     category = category_new
+
+                # Channel
+                channel_options = ["対面 (In Person)", "通話 (Call/Remote)", "メッセージ (Text)", "観測 (Passive)"]
+                channel = st.selectbox("接触手段 (Channel)", channel_options)
 
                 tags = st.text_input("タグ (カンマ区切り)")
 
@@ -230,7 +349,6 @@ elif page == "交流ログ":
             st.markdown("### 質問リストからの回答 (任意)")
 
             questions = get_all_questions(db)
-            # Format questions with answer count
             q_options = {q.id: f"{q.question_text} (回答数: {answer_counts.get(q.id, 0)})" for q in questions}
             selected_q_ids = st.multiselect("質問を選択", list(q_options.keys()), format_func=lambda x: q_options[x])
 
@@ -238,8 +356,22 @@ elif page == "交流ログ":
             for qid in selected_q_ids:
                 q = next(q_ for q_ in questions if q_.id == qid)
                 st.markdown(f"**Q: {q.question_text}**")
-                if q.answer_type == 'scale':
-                    val = st.select_slider(f"回答 ({q.id})", options=["0", "1", "3", "5"], key=f"ans_{qid}")
+
+                # Check answer_type/input_type
+                # Existing 'scale' or 'numeric' -> Slider
+                # 'text' -> Text Input
+                # 'selection' -> Selectbox
+
+                atype = q.answer_type or "text"
+
+                if atype in ['scale', 'numeric']:
+                     val = st.select_slider(f"回答 ({q.id})", options=["0", "1", "3", "5"], key=f"ans_{qid}")
+                     answers.append({'question_id': qid, 'answer_value': val})
+                elif atype == 'selection':
+                    opts = []
+                    if q.options:
+                        opts = [o.strip() for o in q.options.split(',')]
+                    val = st.selectbox(f"回答 ({q.id})", options=opts, key=f"ans_{qid}")
                     answers.append({'question_id': qid, 'answer_value': val})
                 else:
                     val = st.text_input(f"回答 ({q.id})", key=f"ans_{qid}")
@@ -247,7 +379,7 @@ elif page == "交流ログ":
 
             submitted_log = st.form_submit_button("ログを保存")
             if submitted_log:
-                create_interaction(db, person_id, category, content, tags, user_feeling, i_date, start_date_str, end_date_str, answers)
+                create_interaction(db, person_id, category, content, tags, user_feeling, i_date, start_date_str, end_date_str, answers, channel)
                 st.success("交流ログを保存しました！")
 
 elif page == "ダッシュボード":
@@ -282,8 +414,19 @@ elif page == "ダッシュボード":
                 new_notes = st.text_area("メモ", value=person.notes or "")
                 new_prediction = st.text_area("性格分析予想 (付き合い方・考え方)", value=person.prediction_notes or "")
 
+                # Update Avatar
+                uploaded_avatar = st.file_uploader("アイコン画像更新", type=["jpg", "png", "jpeg"])
+
                 if st.form_submit_button("保存"):
+                    new_avatar_path = person.avatar_path
+                    if uploaded_avatar:
+                        new_avatar_path = save_uploaded_file(uploaded_avatar)
+
                     update_person(db, person.id, last_name=new_last, first_name=new_first, tags=new_tags, status=new_status, notes=new_notes, prediction_notes=new_prediction)
+                    # Need to update avatar separately or kwargs it? update_person takes kwargs
+                    if new_avatar_path != person.avatar_path:
+                        update_person(db, person.id, avatar_path=new_avatar_path)
+
                     st.success("更新しました。")
                     st.rerun()
 
@@ -295,7 +438,12 @@ elif page == "ダッシュボード":
         col_h1, col_h2 = st.columns([1, 3])
         with col_h1:
             if person.avatar_path:
-                st.image(person.avatar_path, width=150)
+                if os.path.exists(person.avatar_path):
+                     st.image(person.avatar_path, width=150)
+                elif person.avatar_path.startswith("http"):
+                     st.image(person.avatar_path, width=150)
+                else:
+                     st.warning(f"画像が見つかりません: {person.avatar_path}")
             else:
                 st.image("https://placehold.co/150x150?text=No+Image", width=150)
         with col_h2:
@@ -362,7 +510,16 @@ elif page == "ダッシュボード":
                     if i.start_date_str:
                         date_display = f"{i.start_date_str} 〜 {i.end_date_str or ''}"
 
-                    with st.expander(f"{date_display} - {i.category}"):
+                    # Icons based on Channel
+                    icon = "📝"
+                    if i.channel:
+                        if "対面" in i.channel: icon = "🤝"
+                        elif "通話" in i.channel: icon = "📞"
+                        elif "メッセージ" in i.channel: icon = "💬"
+                        elif "観測" in i.channel: icon = "👁️"
+
+                    with st.expander(f"{icon} {date_display} - {i.category}"):
+                        st.markdown(f"**手段:** {i.channel or '未設定'}")
                         st.markdown(f"**内容:** {i.content}")
                         if i.tags:
                             st.caption(f"タグ: {i.tags}")
@@ -396,7 +553,8 @@ elif page == "ダッシュボード":
                             position = r.position_b_to_a
 
                         pos_str = f" ({position})" if position else ""
-                        st.markdown(f"- **{other_p.last_name} {other_p.first_name}**: {r.relation_type} ({r.quality}){pos_str}")
+                        caution = "⚠️" if r.caution_flag else ""
+                        st.markdown(f"- {caution} **{other_p.last_name} {other_p.first_name}**: {r.relation_type} ({r.quality}){pos_str}")
             else:
                 st.markdown("*関係性の記録なし*")
 
@@ -408,12 +566,11 @@ elif page == "相関図":
         st.warning("人物が登録されていません。")
     else:
         # --- Add Relationship Form ---
-        with st.expander("🔗 関係性を追加する", expanded=False):
+        with st.expander("🔗 関係性を追加する", expanded=True):
             with st.form("relation_page_form"):
                 person_options = {p.id: f"{p.last_name} {p.first_name}" for p in people}
-                col1, col2, col3 = st.columns(3)
+                col1, col2 = st.columns(2)
 
-                # Default selection from session if available
                 default_p1_index = 0
                 if "selected_person_id" in st.session_state and st.session_state["selected_person_id"] in person_options:
                      try:
@@ -423,27 +580,89 @@ elif page == "相関図":
                         pass
 
                 with col1:
-                    p1_id = st.selectbox("人物 A", options=person_options.keys(), format_func=lambda x: person_options[x], key="rel_p1", index=default_p1_index)
+                    p1_id = st.selectbox("人物 A (主体)", options=person_options.keys(), format_func=lambda x: person_options[x], key="rel_p1", index=default_p1_index)
                 with col2:
-                    p2_id = st.selectbox("人物 B", options=person_options.keys(), format_func=lambda x: person_options[x], key="rel_p2")
-                with col3:
-                    rel_type = st.text_input("関係性 (例: 配偶者, ライバル)")
+                    p2_id = st.selectbox("人物 B (対象)", options=person_options.keys(), format_func=lambda x: person_options[x], key="rel_p2")
 
-                col4, col5, col6 = st.columns(3)
-                with col4:
+                # Template Selection
+                template_labels = ["カスタム (手動入力)"] + [t["label"] for t in RELATIONSHIP_TEMPLATES]
+                selected_template_label = st.selectbox("関係性テンプレート", template_labels)
+
+                rel_type_default = ""
+                pos_a_b_default = ""
+                pos_b_a_default = ""
+
+                if selected_template_label != "カスタム (手動入力)":
+                    tmpl = next(t for t in RELATIONSHIP_TEMPLATES if t["label"] == selected_template_label)
+                    rel_type_default = tmpl["label"]
+                    pos_a_b_default = tmpl["forward"]
+                    pos_b_a_default = tmpl["backward"]
+
+                # We can't update text_input values dynamically easily within a form without session state hack or using `st.rerun` before form submit.
+                # Since we are inside a form, `st.rerun` is tricky.
+                # However, the user requirement is "Allow user to select".
+                # If they select a template, we can just use those values if the text inputs are empty, or we can assume the inputs are for override.
+                # Better UX: Show the template values as help or use them in backend if custom input is empty.
+                # But to make it editable, we should probably output the values.
+                # Limitation: Streamlit forms don't update widgets based on other widgets inside the form easily.
+                # So I'll put the template selector OUTSIDE the form or just accept that the text inputs need to be filled manually OR handled by logic.
+                # Let's try putting template selector inside, but we can't pre-fill the text inputs dynamically.
+                # Solution: If template is selected, ignore text inputs OR use them if filled?
+                # Best approach for this limitation: Use separate submit button for template vs custom? No.
+                # I will trust the user to type if Custom, or I will use the template values if provided.
+
+                # RE-DESIGN: Move Template Selection outside form?
+                # If I move it outside, I can update session state defaults for the form.
+
+            # --- Better Form Design for Templates ---
+            c_temp, c_dummy = st.columns([1, 1])
+            with c_temp:
+                 template_labels = ["カスタム (手動入力)"] + [t["label"] for t in RELATIONSHIP_TEMPLATES]
+                 # We need `st.selectbox` to trigger rerun to update defaults
+                 selected_template = st.selectbox("テンプレートから選択", template_labels)
+
+            # Determine default values
+            def_rel = ""
+            def_ab = ""
+            def_ba = ""
+
+            if selected_template != "カスタム (手動入力)":
+                tmpl = next(t for t in RELATIONSHIP_TEMPLATES if t["label"] == selected_template)
+                def_rel = tmpl["label"]
+                def_ab = tmpl["forward"]
+                def_ba = tmpl["backward"]
+
+            with st.form("relation_save_form"):
+                 # Re-declare P1/P2 inside form or pass them? P1/P2 selection should be inside form or persistent.
+                 # Let's put everything in the form but use `value=` with the determined defaults.
+                 # Note: changing `value` of a widget with same key only works if the widget is re-rendered.
+
+                 c1, c2 = st.columns(2)
+                 with c1:
+                    p1_id = st.selectbox("人物 A", options=person_options.keys(), format_func=lambda x: person_options[x], key="rel_p1_final", index=default_p1_index)
+                 with c2:
+                    p2_id = st.selectbox("人物 B", options=person_options.keys(), format_func=lambda x: person_options[x], key="rel_p2_final")
+
+                 col3, col4 = st.columns(2)
+                 with col3:
+                    rel_type = st.text_input("関係性", value=def_rel)
                     quality = st.selectbox("関係の質", ["良好", "普通", "険悪", "複雑"])
-                with col5:
-                    pos_a_b = st.text_input("Aから見たBの立場 (上司, 部下 etc)")
-                with col6:
-                    pos_b_a = st.text_input("Bから見たAの立場")
+                 with col4:
+                     caution_flag = st.checkbox("⚠️ 混ぜるな危険 (Caution Flag)", help="相関図で赤色の破線で表示されます")
 
-                submitted_rel = st.form_submit_button("関係を保存")
+                 col5, col6 = st.columns(2)
+                 with col5:
+                    pos_a_b = st.text_input("Aから見たBの立場", value=def_ab)
+                 with col6:
+                    pos_b_a = st.text_input("Bから見たAの立場", value=def_ba)
 
-                if submitted_rel:
+                 submitted_rel = st.form_submit_button("関係を保存")
+
+                 if submitted_rel:
                     if p1_id == p2_id:
                         st.error("同一人物間の関係は登録できません。")
                     else:
-                        create_relationship(db, p1_id, p2_id, rel_type, quality, pos_a_b, pos_b_a)
+                        create_relationship(db, p1_id, p2_id, rel_type, quality, pos_a_b, pos_b_a, caution_flag)
                         st.success("関係性を保存しました！")
 
         st.divider()
@@ -505,9 +724,14 @@ elif page == "相関図":
             if p.is_self:
                 color = "#ffffcc"
 
+            # Caution alert in node if needed? No, user asked for edges.
+
             shape = "box"
             image = None
-            if p.avatar_path and p.avatar_path.startswith("http"):
+            if p.avatar_path and os.path.exists(p.avatar_path):
+                 shape = "circularImage"
+                 image = p.avatar_path
+            elif p.avatar_path and p.avatar_path.startswith("http"):
                  shape = "circularImage"
                  image = p.avatar_path
 
@@ -519,12 +743,19 @@ elif page == "相関図":
                 hover_text = f"{r.relation_type}\nQuality: {r.quality}"
                 if r.position_a_to_b: hover_text += f"\nA->B: {r.position_a_to_b}"
                 if r.position_b_to_a: hover_text += f"\nB->A: {r.position_b_to_a}"
+                if r.caution_flag: hover_text += "\n⚠️ CAUTION / NG"
 
                 color = "gray"
+                dashes = False
+
                 if r.quality == "良好": color = "green"
                 elif r.quality == "険悪": color = "red"
 
-                net.add_edge(r.person_a_id, r.person_b_id, title=hover_text, label=label, color=color)
+                if r.caution_flag:
+                    color = "red"
+                    dashes = True
+
+                net.add_edge(r.person_a_id, r.person_b_id, title=hover_text, label=label, color=color, dashes=dashes)
 
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
@@ -554,18 +785,26 @@ elif page == "質問リスト":
                 for q in qs:
                     st.markdown(f"**Q:** {q.question_text}")
                     st.caption(f"判断基準: {q.judgment_criteria} | タイプ: {q.answer_type}")
+                    if q.options:
+                        st.caption(f"選択肢: {q.options}")
                     st.divider()
 
     elif mode == "質問管理(追加・編集)":
         with st.form("add_question"):
             st.subheader("新規質問追加")
             q_text = st.text_input("質問文")
-            q_cat = st.text_input("カテゴリ (例: MBTI, 価値観, 個人情報)")
+            q_cat = st.text_input("カテゴリ (例: MBTI, 価値観, 個人情報, NG項目)")
             q_criteria = st.text_area("判断基準")
-            q_type = st.selectbox("回答タイプ", ["scale", "text"])
+
+            # New Input Types
+            type_map = {"数値 (Scale)": "numeric", "自由記述 (Text)": "text", "選択式 (Selection)": "selection"}
+            q_type_label = st.selectbox("回答タイプ", list(type_map.keys()))
+            q_type = type_map[q_type_label]
+
+            q_options = st.text_input("選択肢 (カンマ区切り, 選択式のみ有効)")
 
             if st.form_submit_button("追加"):
-                create_question(db, q_cat, q_text, q_criteria, q_type)
+                create_question(db, q_cat, q_text, q_criteria, q_type, options=q_options)
                 st.success("追加しました")
                 st.rerun()
 
@@ -578,12 +817,26 @@ elif page == "質問リスト":
                     e_text = st.text_input("質問文", value=q.question_text)
                     e_cat = st.text_input("カテゴリ", value=q.category)
                     e_crit = st.text_area("基準", value=q.judgment_criteria)
-                    e_type = st.selectbox("タイプ", ["scale", "text"], index=0 if q.answer_type == "scale" else 1)
+
+                    # Reverse Map
+                    rev_map = {v: k for k, v in type_map.items()}
+                    current_label = rev_map.get(q.answer_type, "自由記述 (Text)")
+
+                    # Find index
+                    try:
+                        idx = list(type_map.keys()).index(current_label)
+                    except:
+                        idx = 1 # text
+
+                    e_type_label = st.selectbox("タイプ", list(type_map.keys()), index=idx)
+                    e_type = type_map[e_type_label]
+
+                    e_options = st.text_input("選択肢", value=q.options or "")
 
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.form_submit_button("更新"):
-                            update_question(db, q.id, question_text=e_text, category=e_cat, judgment_criteria=e_crit, answer_type=e_type)
+                            update_question(db, q.id, question_text=e_text, category=e_cat, judgment_criteria=e_crit, answer_type=e_type, options=e_options)
                             st.success("更新しました")
                             st.rerun()
                     with c2:
@@ -602,6 +855,7 @@ elif page == "質問リスト":
                     "question_text": q.question_text,
                     "judgment_criteria": q.judgment_criteria,
                     "answer_type": q.answer_type,
+                    "options": q.options,
                     "target_trait": q.target_trait
                 })
             df = pd.DataFrame(data)
@@ -630,6 +884,7 @@ elif page == "質問リスト":
                                 question_text=row["question_text"],
                                 judgment_criteria=row.get("judgment_criteria", ""),
                                 answer_type=row.get("answer_type", "text"),
+                                options=row.get("options", ""),
                                 target_trait=row.get("target_trait", "")
                             )
                             count += 1

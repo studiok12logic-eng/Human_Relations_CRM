@@ -64,7 +64,7 @@ def update_person(db: Session, person_id: int, **kwargs) -> Optional[Person]:
 # --- Interaction CRUD ---
 def create_interaction(db: Session, person_id: int, category: str, content: str, tags: str, user_feeling: str,
                        entry_date: date, start_date_str: Optional[str]=None, end_date_str: Optional[str]=None,
-                       answers: Optional[List[Dict]]=None) -> Interaction:
+                       answers: Optional[List[Dict]]=None, channel: Optional[str]=None) -> Interaction:
     new_int = Interaction(
         person_id=person_id,
         category=category,
@@ -73,7 +73,8 @@ def create_interaction(db: Session, person_id: int, category: str, content: str,
         user_feeling=user_feeling,
         entry_date=entry_date,
         start_date_str=start_date_str,
-        end_date_str=end_date_str
+        end_date_str=end_date_str,
+        channel=channel
     )
     db.add(new_int)
     db.commit()
@@ -113,7 +114,8 @@ def get_profiling_data_by_person(db: Session, person_id: int) -> List[ProfilingD
 
 # --- Relationship CRUD ---
 def create_relationship(db: Session, person_a: int, person_b: int, rel_type: str, quality: str,
-                        position_a_to_b: Optional[str]=None, position_b_to_a: Optional[str]=None) -> Relationship:
+                        position_a_to_b: Optional[str]=None, position_b_to_a: Optional[str]=None,
+                        caution_flag: bool=False) -> Relationship:
     # Check if exists
     existing = db.query(Relationship).filter(
         or_(
@@ -123,17 +125,20 @@ def create_relationship(db: Session, person_a: int, person_b: int, rel_type: str
     ).first()
 
     if existing:
+        # Update existing
         if existing.person_a_id == person_a:
             existing.relation_type = rel_type
             existing.quality = quality
             existing.position_a_to_b = position_a_to_b
             existing.position_b_to_a = position_b_to_a
+            existing.caution_flag = caution_flag
         else:
             # Found as A=b, B=a
             existing.relation_type = rel_type
             existing.quality = quality
             existing.position_a_to_b = position_b_to_a # Flip
             existing.position_b_to_a = position_a_to_b # Flip
+            existing.caution_flag = caution_flag
 
         db.commit()
         db.refresh(existing)
@@ -145,7 +150,8 @@ def create_relationship(db: Session, person_a: int, person_b: int, rel_type: str
         relation_type=rel_type,
         quality=quality,
         position_a_to_b=position_a_to_b,
-        position_b_to_a=position_b_to_a
+        position_b_to_a=position_b_to_a,
+        caution_flag=caution_flag
     )
     db.add(new_rel)
     db.commit()
@@ -161,13 +167,14 @@ def get_all_relationships(db: Session) -> List[Relationship]:
     return db.query(Relationship).all()
 
 # --- Question CRUD ---
-def create_question(db: Session, category: str, question_text: str, judgment_criteria: str, answer_type: str, target_trait: Optional[str]=None) -> ProfilingQuestion:
+def create_question(db: Session, category: str, question_text: str, judgment_criteria: str, answer_type: str, target_trait: Optional[str]=None, options: Optional[str]=None) -> ProfilingQuestion:
     new_q = ProfilingQuestion(
         category=category,
         question_text=question_text,
         judgment_criteria=judgment_criteria,
         answer_type=answer_type,
-        target_trait=target_trait
+        target_trait=target_trait,
+        options=options
     )
     db.add(new_q)
     db.commit()
@@ -193,10 +200,10 @@ def seed_questions(db: Session):
     if db.query(ProfilingQuestion).count() == 0:
         # Initial questions
         questions = [
-            {"category": "Big5", "text": "新しい経験やアイデアに対してどれくらいオープンですか？", "criteria": "High: 常に新しいことを探している. Low: 習慣を好む.", "type": "scale", "trait": "Openness"},
-            {"category": "Big5", "text": "約束や期限を守ることはどれくらい重要ですか？", "criteria": "High: 非常に几帳面. Low: 即興的.", "type": "scale", "trait": "Conscientiousness"},
-            {"category": "MBTI", "text": "休日は一人でゆっくり過ごしたいですか？それとも誰かと出かけたいですか？", "criteria": "E (外向) vs I (内向)", "type": "scale", "trait": "E/I"},
-            {"category": "個人情報", "text": "電話番号", "criteria": "", "type": "text", "trait": "Contact"},
+            {"category": "Big5", "text": "新しい経験やアイデアに対してどれくらいオープンですか？", "criteria": "High: 常に新しいことを探している. Low: 習慣を好む.", "type": "numeric", "trait": "Openness", "options": None},
+            {"category": "Big5", "text": "約束や期限を守ることはどれくらい重要ですか？", "criteria": "High: 非常に几帳面. Low: 即興的.", "type": "numeric", "trait": "Conscientiousness", "options": None},
+            {"category": "MBTI", "text": "休日は一人でゆっくり過ごしたいですか？それとも誰かと出かけたいですか？", "criteria": "E (外向) vs I (内向)", "type": "numeric", "trait": "E/I", "options": None},
+            {"category": "個人情報", "text": "電話番号", "criteria": "", "type": "text", "trait": "Contact", "options": None},
         ]
         for q in questions:
             db.add(ProfilingQuestion(
@@ -204,7 +211,8 @@ def seed_questions(db: Session):
                 question_text=q["text"],
                 judgment_criteria=q["criteria"],
                 answer_type=q["type"],
-                target_trait=q["trait"]
+                target_trait=q["trait"],
+                options=q["options"]
             ))
         db.commit()
 

@@ -46,7 +46,8 @@ class Interaction(Base):
     start_date_str = Column(String) # e.g., 2024/00/00
     end_date_str = Column(String)   # e.g., Present, None
 
-    category = Column(String)  # Conversation, Meal, Event, Observation, Contact
+    category = Column(String)  # Conversation, Meal, Event, Observation, Contact, Gift, Collaboration
+    channel = Column(String)   # In Person, Call, Text, Passive
     tags = Column(String)  # Comma separated tags
     content = Column(Text)
     user_feeling = Column(Text)
@@ -86,13 +87,16 @@ class Relationship(Base):
     position_a_to_b = Column(String) # A's stance to B
     position_b_to_a = Column(String) # B's stance to A
 
+    caution_flag = Column(Boolean, default=False) # Red dashed line in graph
+
 class ProfilingQuestion(Base):
     __tablename__ = 'profiling_questions'
     id = Column(Integer, primary_key=True)
     category = Column(String) # MBTI, Physiognomy, Personal Info, etc.
     question_text = Column(Text)
     judgment_criteria = Column(Text)
-    answer_type = Column(String) # 'scale' or 'text'
+    answer_type = Column(String) # 'numeric' (was scale), 'text', 'selection'
+    options = Column(Text) # Comma separated options for 'selection' type
     target_trait = Column(String) # Keep for backward compat or specific traits
 
 # Database Setup
